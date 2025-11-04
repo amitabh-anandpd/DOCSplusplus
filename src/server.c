@@ -8,9 +8,10 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <pwd.h>
 
 #define PORT 8080
-#define STORAGE_DIR "./storage"
+#define STORAGE_DIR "../storage"
 
 // Function to count words and characters in a file
 void count_file(const char* path, int* words, int* chars) {
@@ -45,6 +46,7 @@ void list_files(int client_sock, int show_all, int show_long) {
     struct dirent *entry;
     struct stat file_stat;
     char path[512], response[8192]; // larger buffer
+    struct passwd *pwd;
 
     dir = opendir(STORAGE_DIR);
     if (!dir) {
@@ -54,6 +56,13 @@ void list_files(int client_sock, int show_all, int show_long) {
     }
 
     strcpy(response, "");
+
+    // If showing long format, print the header
+    if (show_long) {
+        strcat(response, "---------------------------------------------------------\n");
+        strcat(response, "|  Filename  | Words | Chars | Last Access Time | Owner |\n");
+        strcat(response, "|------------|-------|-------|------------------|-------|\n");
+    }
 
     while ((entry = readdir(dir)) != NULL) {
         // Skip . and ..
@@ -71,13 +80,17 @@ void list_files(int client_sock, int show_all, int show_long) {
             int word_count = 0, char_count = 0;
             count_file(path, &word_count, &char_count);
 
-            char mod_time[64];
-            strftime(mod_time, sizeof(mod_time), "%Y-%m-%d %H:%M:%S",
-                     localtime(&file_stat.st_mtime));
+            char access_time[64];
+            strftime(access_time, sizeof(access_time), "%Y-%m-%d %H:%M",
+                     localtime(&file_stat.st_atime));
+
+            // Get owner name
+            pwd = getpwuid(file_stat.st_uid);
+            const char *owner = pwd ? pwd->pw_name : "unknown";
 
             char line[512];
-            sprintf(line, "%-20s Words: %-5d Chars: %-5d Last Modified: %s\n",
-                    entry->d_name, word_count, char_count, mod_time);
+            sprintf(line, "| %-10s| %-5d | %-5d | %-16s | %-5s |\n",
+                    entry->d_name, word_count, char_count, access_time, owner);
             strcat(response, line);
         } else {
             strcat(response, entry->d_name);
@@ -90,6 +103,37 @@ void list_files(int client_sock, int show_all, int show_long) {
     if (strlen(response) == 0)
         strcpy(response, "(no files found)\n");
 
+    send(client_sock, response, strlen(response), 0);
+}
+
+// Function to read and send file content to client
+void read_file(int client_sock, const char* filename) {
+    char path[512];
+    char response[8192];
+    FILE *fp;
+    
+    // Construct full path
+    sprintf(path, "%s/%s", STORAGE_DIR, filename);
+    
+    // Open file for reading
+    fp = fopen(path, "r");
+    if (!fp) {
+        sprintf(response, "Error: File '%s' not found or cannot be opened\n", filename);
+        send(client_sock, response, strlen(response), 0);
+        return;
+    }
+    
+    // Read entire file content
+    size_t bytes_read = fread(response, 1, sizeof(response) - 1, fp);
+    response[bytes_read] = '\0';  // Null-terminate
+    
+    fclose(fp);
+    
+    // Send content to client
+    if (bytes_read == 0) {
+        sprintf(response, "(File '%s' is empty)\n", filename);
+    }
+    
     send(client_sock, response, strlen(response), 0);
 }
 
@@ -149,20 +193,28 @@ int main() {
         // fflush(stdout);
 
         if (strncmp(buffer, "VIEW", 4) == 0) {
-            // Parse flags from the command
-            // Check for -a flag (can be standalone "-a" or part of "-al" or "-la")
-            int show_all = (strstr(buffer, "-a") != NULL) || (strstr(buffer, "-la") != NULL);
-            // Check for -l flag (can be standalone "-l" or part of "-al" or "-la")
-            int show_long = (strstr(buffer, "-l") != NULL) || (strstr(buffer, "-al") != NULL) || (strstr(buffer, "-la") != NULL);
-            
-            //printf("Parsed flags: show_all=%d, show_long=%d\n", show_all, show_long);
-            //fflush(stdout);
-            
-            list_files(client_sock, show_all, show_long);
-        } else {
-            char msg[] = "Invalid command.\n";
+    // Parse flags from the command
+    int show_all = (strstr(buffer, "-a") != NULL) || (strstr(buffer, "-la") != NULL);
+    int show_long = (strstr(buffer, "-l") != NULL) || (strstr(buffer, "-al") != NULL) || (strstr(buffer, "-la") != NULL);
+    
+    list_files(client_sock, show_all, show_long);
+} 
+    else if (strncmp(buffer, "READ ", 5) == 0) {
+        // Extract filename from command
+        char filename[256];
+        sscanf(buffer + 5, "%s", filename);  // Skip "READ " and get filename
+        
+        if (strlen(filename) == 0) {
+            char msg[] = "Error: Please specify a filename\n";
             send(client_sock, msg, strlen(msg), 0);
+        } else {
+            read_file(client_sock, filename);
         }
+    } 
+    else {
+        char msg[] = "Invalid command.\n";
+        send(client_sock, msg, strlen(msg), 0);
+    }
 
         close(client_sock);
     }
