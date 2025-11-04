@@ -63,7 +63,9 @@ void list_files(int client_sock, int show_all, int show_long) {
         // TODO: filter based on user access if show_all == 0 (currently always listing all)
 
         sprintf(path, "%s/%s", STORAGE_DIR, entry->d_name);
-        stat(path, &file_stat);
+        if (stat(path, &file_stat) != 0) {
+            continue; // Skip if stat fails
+        }
 
         if (show_long) {
             int word_count = 0, char_count = 0;
@@ -139,12 +141,23 @@ int main() {
         buffer[strcspn(buffer, "\r")] = 0;
 
         printf("Command received: '%s'\n", buffer);
-
-        // Parse flags
-        int show_all = strstr(buffer, "-a") != NULL;
-        int show_long = strstr(buffer, "-l") != NULL;
+        //printf("Buffer bytes: ");
+        // for (int i = 0; i < strlen(buffer); i++) {
+        //     printf("[%c:%d] ", buffer[i], buffer[i]);
+        // }
+        // printf("\n");
+        // fflush(stdout);
 
         if (strncmp(buffer, "VIEW", 4) == 0) {
+            // Parse flags from the command
+            // Check for -a flag (can be standalone "-a" or part of "-al" or "-la")
+            int show_all = (strstr(buffer, "-a") != NULL) || (strstr(buffer, "-la") != NULL);
+            // Check for -l flag (can be standalone "-l" or part of "-al" or "-la")
+            int show_long = (strstr(buffer, "-l") != NULL) || (strstr(buffer, "-al") != NULL) || (strstr(buffer, "-la") != NULL);
+            
+            //printf("Parsed flags: show_all=%d, show_long=%d\n", show_all, show_long);
+            //fflush(stdout);
+            
             list_files(client_sock, show_all, show_long);
         } else {
             char msg[] = "Invalid command.\n";
