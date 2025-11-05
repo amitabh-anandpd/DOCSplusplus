@@ -8,7 +8,7 @@ SERVER_SRC = $(wildcard src/server/*.c)
 CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
 SERVER_OBJ = $(SERVER_SRC:.c=.o)
 
-all: client.out server.out
+all: clean client.out server.out
 
 client.out: $(CLIENT_OBJ)
 	$(CC) $(CFLAGS) -o $@ $(CLIENT_OBJ)
