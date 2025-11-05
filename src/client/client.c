@@ -33,7 +33,7 @@ int main() {
 
     send(sock, command, strlen(command), 0);
 
-    bzero(buffer, sizeof(buffer));
+    memset(buffer, 0, sizeof(buffer));
     read(sock, buffer, sizeof(buffer));
     printf("\n--- Server Response ---\n%s\n", buffer);
 
