@@ -29,7 +29,7 @@ void stream_file(int client_sock, const char *filename) {
         }
 
         // ✅ 0.1 second delay (nanosleep = POSIX safe)
-        struct timespec ts = {0, 500000000L};
+        struct timespec ts = {0, 100000000L};
         nanosleep(&ts, NULL);
     }
 
