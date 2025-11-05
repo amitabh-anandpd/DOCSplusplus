@@ -1,7 +1,7 @@
 #include "../../include/common.h"
 #include "../../include/view.h"
 #include "../../include/delete.h"
-
+#include "../../include/write.h"
 
 // Function to read and send file content to client
 void read_file(int client_sock, const char* filename) {
@@ -164,6 +164,17 @@ int main() {
                 delete_from_storage(client_sock, filename);
             }
         }
+        else if (strncmp(buffer, "WRITE ", 6) == 0) {
+            char filename[256];
+            int sentence_num;
+            if (sscanf(buffer + 6, "%s %d", filename, &sentence_num) == 2) {
+                write_to_file(client_sock, filename, sentence_num);
+            } else {
+                char msg[] = "Usage: WRITE <filename> <sentence_number>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            }
+        }
+
         else {
             char msg[] = "Invalid command.\n";
             send(client_sock, msg, strlen(msg), 0);
