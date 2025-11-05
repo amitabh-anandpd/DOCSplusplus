@@ -1,0 +1,19 @@
+#ifndef COMMON_H
+#define COMMON_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <pwd.h>
+#include <time.h>
+#define PORT 8080
+#define STORAGE_DIR "./storage"
+
+#endif
