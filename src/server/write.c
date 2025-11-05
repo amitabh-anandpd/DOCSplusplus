@@ -5,7 +5,6 @@
 #define MAX_SENT_LEN 4096
 #define MAX_WORDS 512
 
-// --- Helper: check for sentence delimiter ---
 int is_delim(char c) {
     return (c == '.' || c == '!' || c == '?');
 }
@@ -41,7 +40,6 @@ int split_words(const char *sentence, char words[MAX_WORDS][128]) {
     return count;
 }
 
-// --- Lock system ---
 int is_locked(const char *filename, int sentence_num) {
     char lock_path[512];
     sprintf(lock_path, "%s/%s.%d.lock", STORAGE_DIR, filename, sentence_num);

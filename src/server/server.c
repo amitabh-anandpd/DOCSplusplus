@@ -175,6 +175,8 @@ int main() {
                 char msg[] = "Usage: WRITE <filename> <sentence_number>\n";
                 send(client_sock, msg, strlen(msg), 0);
             }
+            close(client_sock);
+            continue;
         }
         else if (strncmp(buffer, "INFO ", 5) == 0) {
             char filename[256];
