@@ -1,2 +1,4 @@
-src/client
-src/server
+src/client/*.o
+src/server/*.o
+client.out
+server.out
