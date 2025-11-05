@@ -27,7 +27,7 @@ int main() {
         exit(1);
     }
 
-    printf("Enter command (VIEW / VIEW -a / VIEW -l / VIEW -al / READ <filename>): ");
+    printf("Enter command (VIEW / VIEW -a / VIEW -l / VIEW -al / READ <filename> / CREATE <filename>): ");
     fgets(command, sizeof(command), stdin);
     command[strcspn(command, "\n")] = 0; // remove newline
 
