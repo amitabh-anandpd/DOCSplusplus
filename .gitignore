@@ -2,3 +2,4 @@ src/client/*.o
 src/server/*.o
 client.out
 server.out
+storage/*
