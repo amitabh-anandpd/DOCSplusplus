@@ -1,5 +1,6 @@
 #include "../../include/common.h"
 #include "../../include/view.h"
+#include "../../include/delete.h"
 
 
 // Function to read and send file content to client
@@ -120,41 +121,53 @@ int main() {
         // printf("\n");
         // fflush(stdout);
 
- if (strncmp(buffer, "VIEW", 4) == 0) {
-    // Parse flags from the command
-    int show_all = (strstr(buffer, "-a") != NULL) || (strstr(buffer, "-la") != NULL);
-    int show_long = (strstr(buffer, "-l") != NULL) || (strstr(buffer, "-al") != NULL) || (strstr(buffer, "-la") != NULL);
-    
-    list_files(client_sock, show_all, show_long);
-} 
-else if (strncmp(buffer, "READ ", 5) == 0) {
-    // Extract filename from command
-    char filename[256];
-    sscanf(buffer + 5, "%s", filename);  // Skip "READ " and get filename
-    
-    if (strlen(filename) == 0) {
-        char msg[] = "Error: Please specify a filename\n";
-        send(client_sock, msg, strlen(msg), 0);
-    } else {
-        read_file(client_sock, filename);
-    }
-} 
-else if (strncmp(buffer, "CREATE ", 7) == 0) {
-    // Extract filename from command
-    char filename[256];
-    sscanf(buffer + 7, "%s", filename);  // Skip "CREATE " and get filename
-    
-    if (strlen(filename) == 0) {
-        char msg[] = "Error: Please specify a filename\n";
-        send(client_sock, msg, strlen(msg), 0);
-    } else {
-        create_file(client_sock, filename);
-    }
-}
-else {
-    char msg[] = "Invalid command.\n";
-    send(client_sock, msg, strlen(msg), 0);
-}
+        if (strncmp(buffer, "VIEW", 4) == 0) {
+            // Parse flags from the command
+            int show_all = (strstr(buffer, "-a") != NULL) || (strstr(buffer, "-la") != NULL);
+            int show_long = (strstr(buffer, "-l") != NULL) || (strstr(buffer, "-al") != NULL) || (strstr(buffer, "-la") != NULL);
+            
+            list_files(client_sock, show_all, show_long);
+        } 
+        else if (strncmp(buffer, "READ ", 5) == 0) {
+            // Extract filename from command
+            char filename[256];
+            sscanf(buffer + 5, "%s", filename);  // Skip "READ " and get filename
+            
+            if (strlen(filename) == 0) {
+                char msg[] = "Error: Please specify a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+            } else {
+                read_file(client_sock, filename);
+            }
+        } 
+        else if (strncmp(buffer, "CREATE ", 7) == 0) {
+            // Extract filename from command
+            char filename[256];
+            sscanf(buffer + 7, "%s", filename);  // Skip "CREATE " and get filename
+            
+            if (strlen(filename) == 0) {
+                char msg[] = "Error: Please specify a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+            } else {
+                create_file(client_sock, filename);
+            }
+        }
+        else if (strncmp(buffer, "DELETE ", 7) == 0) {
+            // Extract filename from command
+            char filename[256];
+            sscanf(buffer + 7, "%s", filename);
+            
+            if (strlen(filename) == 0) {
+                char msg[] = "Error: Please specify a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+            } else {
+                delete_from_storage(client_sock, filename);
+            }
+        }
+        else {
+            char msg[] = "Invalid command.\n";
+            send(client_sock, msg, strlen(msg), 0);
+        }
 
         close(client_sock);
     }
