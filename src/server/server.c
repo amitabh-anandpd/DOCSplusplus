@@ -3,6 +3,7 @@
 #include "../../include/delete.h"
 #include "../../include/write.h"
 #include "../../include/info.h"
+#include "../../include/stream.h"
 
 // Function to read and send file content to client
 void read_file(int client_sock, const char* filename) {
@@ -184,6 +185,17 @@ int main() {
                 send(client_sock, msg, strlen(msg), 0);
             } else {
                 file_info(client_sock, filename);
+            }
+        }
+        else if (strncmp(buffer, "STREAM ", 7) == 0) {
+            char filename[256];
+            sscanf(buffer + 7, "%s", filename);
+            
+            if (strlen(filename) == 0) {
+                char msg[] = "Error: Please specify a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+            } else {
+                stream_file(client_sock, filename);
             }
         }
 

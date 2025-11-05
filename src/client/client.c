@@ -33,9 +33,29 @@ int main() {
 
     send(sock, command, strlen(command), 0);
 
+// Check if this is a STREAM command
+if (strncmp(command, "STREAM", 6) == 0) {
+    printf("\n--- Streaming Content ---\n");
+
+    ssize_t bytes;
+    while ((bytes = read(sock, buffer, sizeof(buffer) - 1)) > 0) {
+        buffer[bytes] = '\0';
+        printf("%s", buffer);
+        fflush(stdout);
+    }
+
+    if (bytes == 0)
+        printf("\n\n[INFO] Stream ended successfully.\n");
+    else
+        printf("\n\n[ERROR] Connection lost while streaming (server may have gone down).\n");
+}
+else {
+    // For all other commands
     memset(buffer, 0, sizeof(buffer));
     read(sock, buffer, sizeof(buffer));
     printf("\n--- Server Response ---\n%s\n", buffer);
+}
+
 
     close(sock);
     return 0;
