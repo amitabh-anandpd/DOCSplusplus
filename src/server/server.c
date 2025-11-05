@@ -4,7 +4,7 @@
 #include "../../include/write.h"
 #include "../../include/info.h"
 #include "../../include/stream.h"
-
+#include "../../include/execute.h"
 // Function to read and send file content to client
 void read_file(int client_sock, const char* filename) {
     char path[512];
@@ -198,6 +198,17 @@ int main() {
                 send(client_sock, msg, strlen(msg), 0);
             } else {
                 stream_file(client_sock, filename);
+            }
+        }
+        else if (strncmp(buffer, "EXEC ", 5) == 0) {
+            char filename[256];
+            sscanf(buffer + 5, "%s", filename); // extract filename
+
+            if (strlen(filename) == 0) {
+                char msg[] = "Error: Please specify a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+            } else {
+                execute_file(client_sock, filename);
             }
         }
 
