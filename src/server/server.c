@@ -7,7 +7,6 @@ void read_file(int client_sock, const char* filename) {
     char path[512];
     char response[8192];
     FILE *fp;
-    
     // Construct full path
     sprintf(path, "%s/%s", STORAGE_DIR, filename);
     
@@ -131,7 +130,7 @@ int main() {
 else if (strncmp(buffer, "READ ", 5) == 0) {
     // Extract filename from command
     char filename[256];
-    sscanf(buffer + 7, "%s", filename);  // Skip "READ " and get filename
+    sscanf(buffer + 5, "%s", filename);  // Skip "READ " and get filename
     
     if (strlen(filename) == 0) {
         char msg[] = "Error: Please specify a filename\n";
