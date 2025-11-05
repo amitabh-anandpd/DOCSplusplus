@@ -27,7 +27,7 @@ int main() {
         exit(1);
     }
 
-    printf("Enter command - \n1. VIEW\n2. VIEW -a\n3. VIEW -l\n4. VIEW -al\n5. READ <filename>\n6. CREATE <filename>\n7. DELETE <filename>\n8. WRITE <filename> <sentence number>\nEnter command: ");
+    printf("Enter command - \n1. VIEW\n2. VIEW -a\n3. VIEW -l\n4. VIEW -al\n5. READ <filename>\n6. CREATE <filename>\n7. DELETE <filename>\n8. WRITE <filename> <sentence number>\n9. INFO <filename>\nEnter command: ");
     fgets(command, sizeof(command), stdin);
     command[strcspn(command, "\n")] = 0; // remove newline
 
