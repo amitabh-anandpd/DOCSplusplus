@@ -13,7 +13,8 @@
 #include <time.h>
 #include <pwd.h>
 #include <time.h>
-#define PORT 8080
+#define NAME_SERVER_PORT 8080
+#define STORAGE_SERVER_PORT 8081
 #define STORAGE_DIR "./storage"
 
 #endif
