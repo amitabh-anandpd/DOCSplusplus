@@ -1,3 +1,8 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 #include "../../include/common.h"
 #include "../../include/client_write.h"
 
@@ -5,22 +10,7 @@ int main() {
     int sock;
     struct sockaddr_in server_addr;
     char buffer[2048], command[100];
-
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        perror("Socket creation failed");
-        exit(1);
-    }
-
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(NAME_SERVER_PORT);
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Connection failed");
-        close(sock);
-        exit(1);
-    }
+    int target_port;
 
     printf("Enter command - \n"
         "1. VIEW\n"
@@ -37,9 +27,32 @@ int main() {
     fgets(command, sizeof(command), stdin);
     command[strcspn(command, "\n")] = 0; // remove newline
 
+    // Decide where to connect: STREAM should go straight to storage server
+    if (strncmp(command, "STREAM", 6) == 0) {
+        target_port = STORAGE_SERVER_PORT;
+    } else {
+        target_port = NAME_SERVER_PORT;
+    }
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(target_port);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection failed");
+        close(sock);
+        exit(1);
+    }
+
     send(sock, command, strlen(command), 0);
 
-    // Check if this is a STREAM command
+    // If STREAM we read directly from storage server
     if (strncmp(command, "STREAM", 6) == 0) {
         printf("\n--- Streaming Content ---\n");
 
