@@ -89,7 +89,7 @@ int main() {
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons(STORAGE_SERVER_PORT);
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
@@ -99,7 +99,7 @@ int main() {
     }
 
     listen(server_fd, 5);
-    printf("Server started. Listening on port %d...\n", PORT);
+    printf("Storage server started. Listening on port %d...\n", STORAGE_SERVER_PORT);
 
     while (1) {
         client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
