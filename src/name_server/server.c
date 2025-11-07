@@ -1,3 +1,4 @@
+
 #include "../../include/common.h"
 
 #include <netinet/in.h>
@@ -153,15 +154,115 @@ int main() {
             exit(1);
         }
 
-        // Read any initial bytes client sent (command) and forward them
+        // Read any initial bytes client sent (command)
         char buf[4096];
-        ssize_t n = recv(client_sock, buf, sizeof(buf), 0);
-        if (n > 0) {
+        ssize_t n = recv(client_sock, buf, sizeof(buf) - 1, 0);
+        if (n < 0) n = 0;
+        buf[n] = '\0';
+
+        // If this is an EXEC command, handle it on the name server:
+        // 1) ask storage server for the file content (send READ <filename>)
+        // 2) execute each non-empty line locally via popen()
+        // 3) stream outputs back to the client
+        if (n > 5 && strncmp(buf, "EXEC ", 5) == 0) {
+            // extract filename
+            char filename[256];
+            if (sscanf(buf + 5, "%255s", filename) != 1) {
+                char msg[] = "Error: EXEC requires a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(storage_sock);
+                close(client_sock);
+                exit(0);
+            }
+
+            // ask storage server for file content
+            char read_cmd[512];
+            snprintf(read_cmd, sizeof(read_cmd), "READ %s", filename);
             ssize_t sent = 0;
-            while (sent < n) {
-                ssize_t s = send(storage_sock, buf + sent, n - sent, 0);
+            ssize_t tosend = strlen(read_cmd);
+            while (sent < tosend) {
+                ssize_t s = send(storage_sock, read_cmd + sent, tosend - sent, 0);
                 if (s <= 0) break;
                 sent += s;
+            }
+
+            // read full file content from storage server
+            char *file_buf = NULL;
+            size_t file_cap = 0, file_len = 0;
+            char tmp[4096];
+            ssize_t r;
+            while ((r = recv(storage_sock, tmp, sizeof(tmp), 0)) > 0) {
+                if (file_len + r + 1 > file_cap) {
+                    size_t rr = (size_t)r;
+                    size_t newcap = (file_cap == 0) ? (rr + 1) : (file_cap * 2 + rr + 1);
+                    char *nb = realloc(file_buf, newcap);
+                    if (!nb) break; // allocation failure
+                    file_buf = nb;
+                    file_cap = newcap;
+                }
+                memcpy(file_buf + file_len, tmp, r);
+                file_len += r;
+            }
+            if (file_buf) file_buf[file_len] = '\0';
+
+            // close storage connection early
+            close(storage_sock);
+
+            if (!file_buf || file_len == 0) {
+                const char *fmt = "Error: Could not read file '%s' or file is empty\n";
+                size_t mlen = snprintf(NULL, 0, fmt, filename) + 1;
+                char *msg = malloc(mlen);
+                if (msg) {
+                    snprintf(msg, mlen, fmt, filename);
+                    send(client_sock, msg, strlen(msg), 0);
+                    free(msg);
+                } else {
+                    const char *fallback = "Error: Could not read file or file is empty\n";
+                    send(client_sock, fallback, strlen(fallback), 0);
+                }
+                free(file_buf);
+                close(client_sock);
+                exit(0);
+            }
+
+            // Execute each line locally and stream output to client
+            // We'll tokenize by newline
+            char *saveptr = NULL;
+            char *line = strtok_r(file_buf, "\n", &saveptr);
+            while (line) {
+                // trim leading whitespace
+                while (*line == ' ' || *line == '\t') line++;
+                // skip empty lines and fences
+                if (line[0] != '\0' && strncmp(line, "```", 3) != 0) {
+                    // run command
+                    FILE *cmd_fp = popen(line, "r");
+                    if (!cmd_fp) {
+                        char err[512];
+                        snprintf(err, sizeof(err), "ERROR: Failed to execute command: %s\n", line);
+                        send(client_sock, err, strlen(err), 0);
+                    } else {
+                        char outbuf[1024];
+                        while (fgets(outbuf, sizeof(outbuf), cmd_fp)) {
+                            send(client_sock, outbuf, strlen(outbuf), 0);
+                        }
+                        pclose(cmd_fp);
+                    }
+                }
+                line = strtok_r(NULL, "\n", &saveptr);
+            }
+
+            free(file_buf);
+            close(client_sock);
+            exit(0);
+        }
+
+        // Not an EXEC command: forward initial bytes to storage server (if any)
+        if (n > 0) {
+            ssize_t sent2 = 0;
+            while (sent2 < n) {
+                ssize_t s = send(storage_sock, buf + sent2, n - sent2, 0);
+                if (s <= 0) break;
+                sent2 += s;
             }
         }
 
