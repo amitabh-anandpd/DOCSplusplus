@@ -25,4 +25,4 @@ name_server.out: $(NAME_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDE) -c $< -o $@
 
 clean:
-	rm -f src/client/*.o src/storage_server/*.o src/name_server/*.o client.out server.out name_server.out
+	rm -f src/client/*.o src/storage_server/*.o src/name_server/*.o client.out storage_server.out name_server.out
