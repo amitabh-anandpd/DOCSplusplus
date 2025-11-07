@@ -66,10 +66,16 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
 
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        char msg[128];
-        sprintf(msg, "ERROR: File '%s' not found.\n", filename);
-        send(client_sock, msg, strlen(msg), 0);
-        return;
+        // Create empty file if it doesn't exist
+        fp = fopen(path, "w");
+        if (!fp) {
+            char msg[128];
+            sprintf(msg, "ERROR: Could not create file '%s'.\n", filename);
+            send(client_sock, msg, strlen(msg), 0);
+            return;
+        }
+        fclose(fp);
+        fp = fopen(path, "r");
     }
 
     // Read entire file content
@@ -82,11 +88,34 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
     char sentences[MAX_SENTENCES][MAX_SENT_LEN];
     int sentence_count = split_sentences(file_buf, sentences);
 
-    if (sentence_num < 0 || sentence_num >= sentence_count) {
-        char msg[128];
-        sprintf(msg, "ERROR: Sentence index out of range.\n");
-        send(client_sock, msg, strlen(msg), 0);
-        return;
+    // For empty files, only sentence 0 is valid
+    // For non-empty files:
+    // - If last char is delimiter, allow writing up to sentence_count
+    // - If no trailing delimiter, only allow writing up to sentence_count-1
+    int max_sentence;
+    if (bytes == 0) {
+        // Empty file - only allow sentence 0
+        if (sentence_num != 0) {
+            char msg[256];
+            sprintf(msg, "ERROR: File is empty. Only sentence 0 can be edited.\n");
+            send(client_sock, msg, strlen(msg), 0);
+            return;
+        }
+        sentence_count = 0;  // Start fresh
+    } else {
+        // Check if file ends with a delimiter
+        char last_char = file_buf[bytes - 1];
+        max_sentence = is_delim(last_char) ? sentence_count : sentence_count - 1;
+        
+        if (sentence_num < 0 || sentence_num > max_sentence) {
+            char msg[256];
+            if (max_sentence < 0) max_sentence = 0;
+            sprintf(msg, "ERROR: Invalid sentence number. Valid range is 0 to %d%s\n",
+                    max_sentence,
+                    is_delim(last_char) ? " (file ends with punctuation)." : ".");
+            send(client_sock, msg, strlen(msg), 0);
+            return;
+        }
     }
 
     if (is_locked(filename, sentence_num)) {
@@ -97,13 +126,16 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
     }
 
     create_lock(filename, sentence_num);
+
+    // Initialize empty working sentence for new sentences
+    char working_sentence[MAX_SENT_LEN] = "";
+    if (sentence_num < sentence_count) {
+        strcpy(working_sentence, sentences[sentence_num]);
+    }
+
     char msg[128];
     sprintf(msg, "Sentence %d locked. You may begin writing.\n", sentence_num);
     send(client_sock, msg, strlen(msg), 0);
-
-    // Begin edit loop
-    char working_sentence[MAX_SENT_LEN];
-    strcpy(working_sentence, sentences[sentence_num]);
 
     while (1) {
         char recv_buf[1024] = {0};
@@ -112,6 +144,14 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
         // ETIRW → finish
         if (strncmp(recv_buf, "ETIRW", 5) == 0) {
             strcpy(sentences[sentence_num], working_sentence);
+            
+            // If this was a new sentence at the end, increment count
+            if (sentence_num >= sentence_count) {
+                sentence_count = sentence_num + 1;
+            }
+            
+            // Ensure non-empty content
+            if (strlen(working_sentence) == 0) working_sentence[0] = '.';
 
             // Recombine file
             fp = fopen(path, "w");
