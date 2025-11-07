@@ -1,5 +1,7 @@
 src/client/*.o
-src/server/*.o
+src/storage_server/*.o
+src/name_server/*.o
 client.out
-server.out
+name_server.out
+storage_server.out
 storage/*
