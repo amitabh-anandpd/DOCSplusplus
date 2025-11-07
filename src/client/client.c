@@ -90,10 +90,19 @@ int main() {
             }
         }
         else {
-            // For all other commands
-            memset(buffer, 0, sizeof(buffer));
-            read(sock, buffer, sizeof(buffer));
-            printf("\n--- Server Response ---\n%s\n", buffer);
+            // For all other commands: read until server closes the connection
+            printf("\n--- Server Response ---\n");
+            ssize_t bytes;
+            while ((bytes = read(sock, buffer, sizeof(buffer) - 1)) > 0) {
+                buffer[bytes] = '\0';
+                printf("%s", buffer);
+            }
+
+            if (bytes == 0) {
+                printf("\n[INFO] Response complete.\n");
+            } else {
+                printf("\n[ERROR] Connection closed unexpectedly while reading response.\n");
+            }
         }
 
         close(sock);
