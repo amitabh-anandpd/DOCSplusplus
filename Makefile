@@ -3,7 +3,7 @@ CFLAGS = -std=c99 -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -Wall -Wextra -W
 INCLUDE = -Iinclude
 
 CLIENT_SRC = $(wildcard src/client/*.c)
-SERVER_SRC = $(wildcard src/server/*.c)
+SERVER_SRC = $(wildcard src/storage_server/*.c)
 
 CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
 SERVER_OBJ = $(SERVER_SRC:.c=.o)
