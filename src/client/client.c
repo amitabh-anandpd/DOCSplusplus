@@ -23,7 +23,7 @@ int main() {
         "8. WRITE <filename> <sentence number>\n"
         "9. INFO <filename>\n"
         "10. STREAM <filename>\n"
-        "11. EXECUTE <filename>\n"
+        "11. EXEC <filename>\n"
         "Enter command: ");
     fgets(command, sizeof(command), stdin);
     command[strcspn(command, "\n")] = 0; // remove newline
