@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=c99 -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -Wall -Wextra -Werror -Wno-unused-parameter -fno-asm
+CFLAGS = -std=c99 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -Wall -Wextra -Werror -Wno-unused-parameter -fno-asm
 INCLUDE = -Iinclude
 
 CLIENT_SRC = $(wildcard src/client/*.c)
