@@ -21,6 +21,18 @@ typedef struct {
 static StorageServerInfo storage_servers[MAX_SS];
 static int num_storage_servers = 0;
 
+// Simple file -> storage server index
+#define MAX_FILE_ENTRIES 4096
+#define MAX_SS_PER_FILE 8
+typedef struct {
+    char name[256];
+    int ss_ids[MAX_SS_PER_FILE];
+    int ss_count;
+} FileEntry;
+
+static FileEntry file_index[MAX_FILE_ENTRIES];
+static int num_file_entries = 0;
+
 // Add a storage server entry and return its id, or -1 on failure
 static int add_storage_server(const char *ip, int nm_port, const char *files) {
     if (num_storage_servers >= MAX_SS) return -1;
@@ -37,7 +49,52 @@ static int add_storage_server(const char *ip, int nm_port, const char *files) {
         storage_servers[idx].files[0] = '\0';
     }
     num_storage_servers++;
+    // Populate file index from CSV list
+    if (files && files[0] != '\0') {
+        char buf[4096];
+        strncpy(buf, files, sizeof(buf)-1);
+        buf[sizeof(buf)-1] = '\0';
+        char *save = NULL;
+        char *tok = strtok_r(buf, ",", &save);
+        while (tok) {
+            // trim leading/trailing whitespace
+            while (*tok == ' ' || *tok == '\t') tok++;
+            char *end = tok + strlen(tok) - 1;
+            while (end > tok && (*end == ' ' || *end == '\t')) { *end = '\0'; end--; }
+            if (*tok) {
+                // find or add entry
+                int found = 0;
+                for (int i = 0; i < num_file_entries; ++i) {
+                    if (strcmp(file_index[i].name, tok) == 0) {
+                        // add ss id if not present
+                        int already = 0;
+                        for (int j = 0; j < file_index[i].ss_count; ++j) if (file_index[i].ss_ids[j] == id) { already = 1; break; }
+                        if (!already && file_index[i].ss_count < MAX_SS_PER_FILE) file_index[i].ss_ids[file_index[i].ss_count++] = id;
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found && num_file_entries < MAX_FILE_ENTRIES) {
+                    strncpy(file_index[num_file_entries].name, tok, sizeof(file_index[num_file_entries].name)-1);
+                    file_index[num_file_entries].ss_count = 0;
+                    file_index[num_file_entries].ss_ids[file_index[num_file_entries].ss_count++] = id;
+                    num_file_entries++;
+                }
+            }
+            tok = strtok_r(NULL, ",", &save);
+        }
+    }
     return id;
+}
+
+StorageServerInfo *find_ss_by_id(int id) {
+    for (int i = 0; i < num_storage_servers; ++i) if (storage_servers[i].id == id) return &storage_servers[i];
+    return NULL;
+}
+
+FileEntry *find_fileentry(const char *name) {
+    for (int i = 0; i < num_file_entries; ++i) if (strcmp(file_index[i].name, name) == 0) return &file_index[i];
+    return NULL;
 }
 
 // Reap dead child processes
