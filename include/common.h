@@ -12,8 +12,6 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <pwd.h>
-#include <time.h>
-#include <dirent.h>
 #define NAME_SERVER_PORT 8080
 #define STORAGE_SERVER_PORT 8081
 #define STORAGE_DIR "./storage"
