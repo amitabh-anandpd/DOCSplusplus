@@ -76,7 +76,7 @@ void ensure_dir(const char *path) {
 }
 
 void initialize_storage_folders(int ss_id) {
-    sprintf(STORAGE_BASE, "storage%d", ss_id);
+    sprintf(STORAGE_BASE, "storage/storage%d", ss_id);
 
     char tmp[512];
 
