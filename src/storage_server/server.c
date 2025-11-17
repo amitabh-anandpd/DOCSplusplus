@@ -99,7 +99,78 @@ void initialize_storage_folders(int ss_id) {
     ensure_dir(tmp);
 }
 
+void build_file_list(char *out, size_t max_len) {
+    out[0] = '\0';
+
+    DIR *d = opendir(STORAGE_DIR);
+    if (!d) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (entry->d_type == DT_REG) {
+            strcat(out, entry->d_name);
+            strcat(out, ",");
+        }
+    }
+    closedir(d);
+}
+
+int register_with_name_server() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) { perror("SS: socket"); exit(1); }
+
+    struct sockaddr_in nm_addr;
+    nm_addr.sin_family = AF_INET;
+    nm_addr.sin_port = htons(NAME_SERVER_PORT);
+    inet_pton(AF_INET, NAME_SERVER_IP, &nm_addr.sin_addr);
+
+    if (connect(sock, (struct sockaddr*)&nm_addr, sizeof(nm_addr)) < 0) {
+        perror("SS: Could not connect to Name Server");
+        exit(1);
+    }
+
+    // Build initial file list (empty on first run)
+    char file_list[2048];
+    build_file_list(file_list, sizeof(file_list));
+
+    char register_msg[4096];
+    sprintf(register_msg,
+        "TYPE:REGISTER_SS\n"
+        "IP:%s\n"
+        "NM_PORT:%d\n"
+        "CLIENT_PORT:%d\n"
+        "FILES:%s\nEND\n",
+        STORAGE_SERVER_IP,
+        NAME_SERVER_PORT,
+        STORAGE_SERVER_PORT, 
+        file_list
+    );
+
+    send(sock, register_msg, strlen(register_msg), 0);
+
+    char response[256];
+    memset(response, 0, sizeof(response));
+    recv(sock, response, sizeof(response), 0);
+
+    int ss_id = -1;
+    sscanf(response, "SS_ID:%d", &ss_id);
+
+    if (ss_id < 0) {
+        printf("Name Server returned invalid ID. Exiting.\n");
+        exit(1);
+    }
+
+    printf("Registered with Name Server. Assigned ID = %d\n", ss_id);
+
+    close(sock);
+    return ss_id;
+}
+
 int main() {
+    printf("Starting Storage Server...\n");
+    int ss_id = register_with_name_server();
+    initialize_storage_folders(ss_id);
+    printf("Storage folder created: %s\n", STORAGE_BASE);
     int server_fd, client_sock;
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
