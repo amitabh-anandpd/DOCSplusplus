@@ -170,6 +170,7 @@ int main() {
     printf("Starting Storage Server...\n");
     int ss_id = register_with_name_server();
     initialize_storage_folders(ss_id);
+    int MY_PORT = STORAGE_SERVER_PORT + ss_id;
     printf("Storage folder created: %s\n", STORAGE_BASE);
     int server_fd, client_sock;
     struct sockaddr_in server_addr, client_addr;
@@ -191,7 +192,7 @@ int main() {
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(STORAGE_SERVER_PORT);
+    server_addr.sin_port = htons(MY_PORT);
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
@@ -201,7 +202,7 @@ int main() {
     }
 
     listen(server_fd, 5);
-    printf("Storage server started. Listening on port %d...\n", STORAGE_SERVER_PORT);
+    printf("Storage server started. Listening on port %d...\n", MY_PORT);
 
     while (1) {
         client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
