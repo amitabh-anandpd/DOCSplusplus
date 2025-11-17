@@ -12,7 +12,8 @@
 typedef struct {
     int id;
     char ip[64];
-    int nm_port;
+    int nm_port;            // name server port (informational)
+    int client_port;        // storage server's client-facing port
     char files[4096];
     time_t last_seen;
     int active;
@@ -34,13 +35,21 @@ static FileEntry file_index[MAX_FILE_ENTRIES];
 static int num_file_entries = 0;
 
 // Add a storage server entry and return its id, or -1 on failure
-static int add_storage_server(const char *ip, int nm_port, const char *files) {
+static int add_storage_server(const char *ip, int nm_port, int client_port_from_reg, const char *files) {
     if (num_storage_servers >= MAX_SS) return -1;
     int idx = num_storage_servers;
     int id = idx + 1; // ss_id starts from 1
     storage_servers[idx].id = id;
     strncpy(storage_servers[idx].ip, ip ? ip : "127.0.0.1", sizeof(storage_servers[idx].ip)-1);
     storage_servers[idx].nm_port = nm_port;
+    // Derive client port if registration didn't know its final one yet.
+    // Current storage server implementation listens on STORAGE_SERVER_PORT + ss_id
+    if (client_port_from_reg <= 0) {
+        storage_servers[idx].client_port = STORAGE_SERVER_PORT + id;
+    } else {
+        // Trust the provided port but fallback to derived pattern if it equals base
+        storage_servers[idx].client_port = (client_port_from_reg == STORAGE_SERVER_PORT) ? (STORAGE_SERVER_PORT + id) : client_port_from_reg;
+    }
     storage_servers[idx].last_seen = time(NULL);
     storage_servers[idx].active = 1;
     if (files) {
@@ -226,19 +235,22 @@ int main() {
             char *line = strtok_r(regbuf, "\n", &saveptr);
             char ipstr[64] = "127.0.0.1";
             int nm_port = NAME_SERVER_PORT;
+            int client_port = 0;
             char files[4096] = "";
             while (line) {
                 if (strncmp(line, "IP:", 3) == 0) {
                     strncpy(ipstr, line + 3, sizeof(ipstr)-1);
                 } else if (strncmp(line, "NM_PORT:", 8) == 0) {
                     nm_port = atoi(line + 8);
+                } else if (strncmp(line, "CLIENT_PORT:", 12) == 0) {
+                    client_port = atoi(line + 12);
                 } else if (strncmp(line, "FILES:", 6) == 0) {
                     strncpy(files, line + 6, sizeof(files)-1);
                 }
                 line = strtok_r(NULL, "\n", &saveptr);
             }
 
-            int ss_id = add_storage_server(ipstr, nm_port, files);
+            int ss_id = add_storage_server(ipstr, nm_port, client_port, files);
             char resp[128];
             if (ss_id >= 0) {
                 snprintf(resp, sizeof(resp), "SS_ID:%d\n", ss_id);
@@ -264,35 +276,195 @@ int main() {
             continue;
         }
 
-        // child: handle proxying between client_sock and storage server
+        // child: read command first, then choose storage server(s)
         close(listen_fd);
 
-        int storage_sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (storage_sock < 0) {
-            perror("socket to storage failed");
-            close(client_sock);
-            exit(1);
-        }
-
-        struct sockaddr_in storage_addr;
-        storage_addr.sin_family = AF_INET;
-        storage_addr.sin_port = htons(STORAGE_SERVER_PORT);
-        storage_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-        if (connect(storage_sock, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "Error: Could not connect to storage server on port %d\n", STORAGE_SERVER_PORT);
-            send(client_sock, msg, strlen(msg), 0);
-            close(storage_sock);
-            close(client_sock);
-            exit(1);
-        }
-
-        // Read any initial bytes client sent (command)
         char buf[4096];
         ssize_t n = recv(client_sock, buf, sizeof(buf) - 1, 0);
         if (n < 0) n = 0;
         buf[n] = '\0';
+        // Trim trailing CR/LF
+        while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) { buf[--n] = '\0'; }
+
+        if (n == 0) {
+            const char *msg = "Error: Empty command\n";
+            send(client_sock, msg, strlen(msg), 0);
+            close(client_sock);
+            exit(0);
+        }
+
+        // Helper lambdas (C99: use static inline functions via blocks of code)
+        int choose_ss_for_file(const char *filename) {
+            FileEntry *fe = find_fileentry(filename);
+            if (fe && fe->ss_count > 0) {
+                // pick first active; could round-robin later
+                for (int i = 0; i < fe->ss_count; ++i) {
+                    StorageServerInfo *ssi = find_ss_by_id(fe->ss_ids[i]);
+                    if (ssi && ssi->active) return ssi->id;
+                }
+            }
+            // fallback: first active storage server
+            for (int i = 0; i < num_storage_servers; ++i) if (storage_servers[i].active) return storage_servers[i].id;
+            return -1;
+        }
+
+        // VIEW must go to all storage servers and aggregate
+        if (strncmp(buf, "VIEW", 4) == 0) {
+            char aggregate[65536];
+            aggregate[0] = '\0';
+            for (int i = 0; i < num_storage_servers; ++i) {
+                if (!storage_servers[i].active) continue;
+                int ss_port = storage_servers[i].client_port;
+                int ss_sock = socket(AF_INET, SOCK_STREAM, 0);
+                if (ss_sock < 0) continue;
+                struct sockaddr_in sa_ss; sa_ss.sin_family = AF_INET; sa_ss.sin_port = htons(ss_port); sa_ss.sin_addr.s_addr = inet_addr(storage_servers[i].ip);
+                if (connect(ss_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) { close(ss_sock); continue; }
+                // send original VIEW command
+                send(ss_sock, buf, strlen(buf), 0);
+                // read response
+                char rbuf[4096]; ssize_t r;
+                strcat(aggregate, "\n--- StorageServer ");
+                char hdr[64]; snprintf(hdr, sizeof(hdr), "%d (port %d) ---\n", storage_servers[i].id, ss_port); strcat(aggregate, hdr);
+                while ((r = recv(ss_sock, rbuf, sizeof(rbuf)-1, 0)) > 0) {
+                    rbuf[r] = '\0';
+                    if (strlen(aggregate) + r + 1 < sizeof(aggregate)) strcat(aggregate, rbuf);
+                }
+                close(ss_sock);
+            }
+            if (aggregate[0] == '\0') strcpy(aggregate, "(No active storage servers or no data)\n");
+            send(client_sock, aggregate, strlen(aggregate), 0);
+            close(client_sock);
+            exit(0);
+        }
+
+        // EXEC is special (fetch file then execute locally)
+        if (strncmp(buf, "EXEC ", 6) == 0) {
+            char filename[256];
+            if (sscanf(buf + 5, "%255s", filename) != 1) {
+                const char *msg = "Error: EXEC requires a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            int ss_id = choose_ss_for_file(filename);
+            if (ss_id < 0) {
+                const char *msg = "Error: No storage server available\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            StorageServerInfo *ssi = find_ss_by_id(ss_id);
+            int storage_sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (storage_sock < 0) {
+                const char *msg = "Error: socket failure\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            struct sockaddr_in sa_ss; sa_ss.sin_family = AF_INET; sa_ss.sin_port = htons(ssi->client_port); sa_ss.sin_addr.s_addr = inet_addr(ssi->ip);
+            if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) {
+                const char *msg = "Error: connect to storage failed\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(storage_sock);
+                close(client_sock);
+                exit(0);
+            }
+            char read_cmd[512]; snprintf(read_cmd, sizeof(read_cmd), "READ %s", filename);
+            send(storage_sock, read_cmd, strlen(read_cmd), 0);
+            // read file content
+            char *file_buf = NULL; size_t cap=0,len=0; char rtmp[4096]; ssize_t rr;
+            while ((rr = recv(storage_sock, rtmp, sizeof(rtmp), 0)) > 0) {
+                size_t rr_size = (size_t) rr;
+                if (len + rr_size + 1 > cap) { size_t newcap = (cap==0)?(rr_size+1):(cap*2 + rr_size + 1); char *nb = realloc(file_buf, newcap); if (!nb) break; file_buf = nb; cap = newcap; }
+                memcpy(file_buf + len, rtmp, rr); len += rr;
+            }
+            if (file_buf) file_buf[len] = '\0';
+            close(storage_sock);
+            if (!file_buf || len==0) {
+                const char *fmt = "Error: Could not read file '%s' or empty\n"; char msg[512]; snprintf(msg, sizeof(msg), fmt, filename); send(client_sock, msg, strlen(msg), 0); free(file_buf); close(client_sock); exit(0);
+            }
+            char *saveptr2 = NULL; char *line = strtok_r(file_buf, "\n", &saveptr2);
+            while (line) { while (*line==' '||*line=='\t') line++; if (*line && strncmp(line,"```",3)!=0) { FILE *fp = popen(line, "r"); if (!fp) { char emsg[512]; snprintf(emsg,sizeof(emsg),"ERROR: Failed to execute: %s\n", line); send(client_sock, emsg, strlen(emsg),0);} else { char ob[1024]; while (fgets(ob,sizeof(ob),fp)) send(client_sock, ob, strlen(ob),0); pclose(fp);} }
+                line = strtok_r(NULL, "\n", &saveptr2);
+            }
+            free(file_buf);
+            close(client_sock);
+            exit(0);
+        }
+
+        // Other file-based commands: choose storage server and forward
+        const char *cmds_with_file[] = {"READ", "INFO", "STREAM", "DELETE", "WRITE", "CREATE"};
+        int is_file_cmd = 0; const char *file_part = NULL; char filename[256]; filename[0]='\0';
+        for (size_t i=0;i<sizeof(cmds_with_file)/sizeof(cmds_with_file[0]);++i) {
+            size_t clen = strlen(cmds_with_file[i]);
+            if (strncmp(buf, cmds_with_file[i], clen)==0 && (buf[clen]==' ' || buf[clen]=='\0')) { is_file_cmd = 1; file_part = buf + clen; break; }
+        }
+        int ss_id_target = -1;
+        if (is_file_cmd) {
+            // extract filename (may have extra arguments for WRITE)
+            if (sscanf(file_part, " %255s", filename) == 1) {
+                // For CREATE if file doesn't exist yet choose a server via simple round-robin
+                FileEntry *fe = find_fileentry(filename);
+                if (fe) {
+                    ss_id_target = choose_ss_for_file(filename);
+                } else if (strncmp(buf, "CREATE", 6)==0) {
+                    // round-robin
+                    static int rr = 0;
+                    for (int attempts=0; attempts< num_storage_servers; ++attempts) {
+                        int idx = (rr + attempts) % num_storage_servers; if (storage_servers[idx].active) { ss_id_target = storage_servers[idx].id; rr = (idx+1)%num_storage_servers; break; }
+                    }
+                } else {
+                    ss_id_target = choose_ss_for_file(filename);
+                }
+            }
+        }
+        if (ss_id_target < 0) {
+            // fallback for non file commands or no mapping
+            for (int i=0;i<num_storage_servers;++i) if (storage_servers[i].active){ ss_id_target = storage_servers[i].id; break; }
+        }
+        if (ss_id_target < 0) {
+            const char *msg = "Error: No storage server available\n"; send(client_sock, msg, strlen(msg),0); close(client_sock); exit(0);
+        }
+        StorageServerInfo *ssi = find_ss_by_id(ss_id_target);
+        int storage_sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (storage_sock < 0) { const char *msg = "Error: socket failure\n"; send(client_sock,msg,strlen(msg),0); close(client_sock); exit(0);}        
+        struct sockaddr_in sa_ss; sa_ss.sin_family = AF_INET; sa_ss.sin_port = htons(ssi->client_port); sa_ss.sin_addr.s_addr = inet_addr(ssi->ip);
+        if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) { const char *msg = "Error: connect to storage failed\n"; send(client_sock,msg,strlen(msg),0); close(storage_sock); close(client_sock); exit(0);}        
+
+        // Forward original command
+        send(storage_sock, buf, strlen(buf), 0);
+
+        // Simple response relay until storage closes
+        char relay[4096]; ssize_t rcv;
+        while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { relay[rcv]='\0'; send(client_sock, relay, strlen(relay), 0); }
+
+        // Update file index on CREATE success (naive: if response contains "Success:")
+        if (strncmp(buf, "CREATE", 6)==0 && filename[0]) {
+            // Check if already present
+            if (!find_fileentry(filename)) {
+                if (num_file_entries < MAX_FILE_ENTRIES) {
+                    strncpy(file_index[num_file_entries].name, filename, sizeof(file_index[num_file_entries].name)-1);
+                    file_index[num_file_entries].ss_count = 0;
+                    file_index[num_file_entries].ss_ids[file_index[num_file_entries].ss_count++] = ss_id_target;
+                    num_file_entries++;
+                }
+            }
+        }
+        // Update on DELETE (remove server mapping; if empty remove entry)
+        if (strncmp(buf, "DELETE", 6)==0 && filename[0]) {
+            FileEntry *fe = find_fileentry(filename);
+            if (fe) {
+                int newc = 0; for (int i=0;i<fe->ss_count;++i) if (fe->ss_ids[i] != ss_id_target) fe->ss_ids[newc++] = fe->ss_ids[i]; fe->ss_count = newc; if (newc==0) {
+                    // remove entry by shifting
+                    int idx=-1; for (int i=0;i<num_file_entries;++i) if (&file_index[i]==fe) { idx=i; break; }
+                    if (idx>=0) { for (int j=idx;j<num_file_entries-1;++j) file_index[j]=file_index[j+1]; num_file_entries--; }
+                }
+            }
+        }
+
+        close(storage_sock);
+        close(client_sock);
+        exit(0);
 
         // If this is an EXEC command, handle it on the name server:
         // 1) ask storage server for the file content (send READ <filename>)
