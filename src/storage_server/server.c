@@ -68,6 +68,37 @@ void create_file(int client_sock, const char* filename) {
     send(client_sock, response, strlen(response), 0);
 }
 
+char STORAGE_BASE[256] = "storage"; 
+char STORAGE_DIRE[512];
+
+void ensure_dir(const char *path) {
+    mkdir(path, 0777);
+}
+
+void initialize_storage_folders(int ss_id) {
+    sprintf(STORAGE_BASE, "storage%d", ss_id);
+
+    char tmp[512];
+
+    sprintf(tmp, "%s", STORAGE_BASE); 
+    ensure_dir(tmp);
+
+    sprintf(STORAGE_DIRE, "%s/files", STORAGE_BASE);
+    ensure_dir(STORAGE_DIRE);
+
+    sprintf(tmp, "%s/undo", STORAGE_BASE);
+    ensure_dir(tmp);
+
+    sprintf(tmp, "%s/swap", STORAGE_BASE);
+    ensure_dir(tmp);
+
+    sprintf(tmp, "%s/acl", STORAGE_BASE);
+    ensure_dir(tmp);
+
+    sprintf(tmp, "%s/meta", STORAGE_BASE);
+    ensure_dir(tmp);
+}
+
 int main() {
     int server_fd, client_sock;
     struct sockaddr_in server_addr, client_addr;
