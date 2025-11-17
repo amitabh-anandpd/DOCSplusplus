@@ -7,6 +7,39 @@
 #include <sys/wait.h>
 #include <sys/select.h>
 
+// Storage server registry (kept in parent process)
+#define MAX_SS 32
+typedef struct {
+    int id;
+    char ip[64];
+    int nm_port;
+    char files[4096];
+    time_t last_seen;
+    int active;
+} StorageServerInfo;
+
+static StorageServerInfo storage_servers[MAX_SS];
+static int num_storage_servers = 0;
+
+// Add a storage server entry and return its id, or -1 on failure
+static int add_storage_server(const char *ip, int nm_port, const char *files) {
+    if (num_storage_servers >= MAX_SS) return -1;
+    int idx = num_storage_servers;
+    int id = idx + 1; // ss_id starts from 1
+    storage_servers[idx].id = id;
+    strncpy(storage_servers[idx].ip, ip ? ip : "127.0.0.1", sizeof(storage_servers[idx].ip)-1);
+    storage_servers[idx].nm_port = nm_port;
+    storage_servers[idx].last_seen = time(NULL);
+    storage_servers[idx].active = 1;
+    if (files) {
+        strncpy(storage_servers[idx].files, files, sizeof(storage_servers[idx].files)-1);
+    } else {
+        storage_servers[idx].files[0] = '\0';
+    }
+    num_storage_servers++;
+    return id;
+}
+
 // Reap dead child processes
 void sigchld_handler(int s) {
     (void)s;
@@ -117,6 +150,50 @@ int main() {
             continue;
         }
 
+        // Peek at the incoming data to detect registration messages
+        char peek[8192];
+        ssize_t peek_n = recv(client_sock, peek, sizeof(peek)-1, MSG_PEEK);
+        if (peek_n < 0) peek_n = 0;
+        peek[peek_n] = '\0';
+
+        // If this is a registration from a storage server, read and store it in parent
+        if (peek_n > 6 && strstr(peek, "TYPE:REGISTER_SS") == peek) {
+            // read the full registration message (consume it)
+            char regbuf[8192];
+            ssize_t rn = recv(client_sock, regbuf, sizeof(regbuf)-1, 0);
+            if (rn < 0) rn = 0;
+            regbuf[rn] = '\0';
+
+            // parse registration lines
+            char *saveptr = NULL;
+            char *line = strtok_r(regbuf, "\n", &saveptr);
+            char ipstr[64] = "127.0.0.1";
+            int nm_port = NAME_SERVER_PORT;
+            char files[4096] = "";
+            while (line) {
+                if (strncmp(line, "IP:", 3) == 0) {
+                    strncpy(ipstr, line + 3, sizeof(ipstr)-1);
+                } else if (strncmp(line, "NM_PORT:", 8) == 0) {
+                    nm_port = atoi(line + 8);
+                } else if (strncmp(line, "FILES:", 6) == 0) {
+                    strncpy(files, line + 6, sizeof(files)-1);
+                }
+                line = strtok_r(NULL, "\n", &saveptr);
+            }
+
+            int ss_id = add_storage_server(ipstr, nm_port, files);
+            char resp[128];
+            if (ss_id >= 0) {
+                snprintf(resp, sizeof(resp), "SS_ID:%d\n", ss_id);
+            } else {
+                snprintf(resp, sizeof(resp), "SS_ID:-1\n");
+            }
+            send(client_sock, resp, strlen(resp), 0);
+            close(client_sock);
+            continue;
+        }
+
+        // Not a registration: fork to handle the connection as before
         pid_t pid = fork();
         if (pid < 0) {
             perror("fork");
