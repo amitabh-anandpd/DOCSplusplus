@@ -8,7 +8,7 @@
 
 void stream_file(int client_sock, const char *filename) {
     char path[512];
-    sprintf(path, "%s/%s", STORAGE_DIR, filename);
+    sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
 
     FILE *fp = fopen(path, "r");
     if (!fp) {

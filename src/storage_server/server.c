@@ -23,7 +23,7 @@ void read_file(int client_sock, const char* filename) {
     char response[8192];
     FILE *fp;
     // Construct full path
-    sprintf(path, "%s/%s", STORAGE_DIR, filename);
+    sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
     
     // Open file for reading
     fp = fopen(path, "r");
@@ -54,8 +54,8 @@ void create_file(int client_sock, const char* filename) {
     char response[256];
     FILE *fp;
     
-    // Construct full path
-    sprintf(path, "%s/%s", STORAGE_DIR, filename);
+    // Construct full path (use per-server directory)
+    sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
     
     // Check if file already exists
     fp = fopen(path, "r");
@@ -114,7 +114,11 @@ void initialize_storage_folders(int ss_id) {
 void build_file_list(char *out, size_t max_len) {
     out[0] = '\0';
 
-    DIR *d = opendir(STORAGE_DIR);
+    // Scan the per-server files directory
+    char server_files_dir[512];
+    sprintf(server_files_dir, "%s/storage%d/files", STORAGE_DIR, g_storage_id);
+    
+    DIR *d = opendir(server_files_dir);
     if (!d) return;
 
     struct dirent *entry;

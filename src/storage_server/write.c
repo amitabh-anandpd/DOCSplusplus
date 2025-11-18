@@ -42,20 +42,20 @@ int split_words(const char *sentence, char words[MAX_WORDS][128]) {
 
 int is_locked(const char *filename, int sentence_num) {
     char lock_path[512];
-    sprintf(lock_path, "%s/%s.%d.lock", STORAGE_DIR, filename, sentence_num);
+    sprintf(lock_path, "%s/storage%d/files/%s.%d.lock", STORAGE_DIR, get_storage_id(), filename, sentence_num);
     return access(lock_path, F_OK) == 0;
 }
 
 void create_lock(const char *filename, int sentence_num) {
     char lock_path[512];
-    sprintf(lock_path, "%s/%s.%d.lock", STORAGE_DIR, filename, sentence_num);
+    sprintf(lock_path, "%s/storage%d/files/%s.%d.lock", STORAGE_DIR, get_storage_id(), filename, sentence_num);
     FILE *fp = fopen(lock_path, "w");
     if (fp) fclose(fp);
 }
 
 void remove_lock(const char *filename, int sentence_num) {
     char lock_path[512];
-    sprintf(lock_path, "%s/%s.%d.lock", STORAGE_DIR, filename, sentence_num);
+    sprintf(lock_path, "%s/storage%d/files/%s.%d.lock", STORAGE_DIR, get_storage_id(), filename, sentence_num);
     remove(lock_path);
 }
 

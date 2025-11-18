@@ -17,7 +17,7 @@ void get_permissions_string(mode_t mode, char *perm_str) {
 
 void file_info(int client_sock, const char *filename) {
     char path[512];
-    sprintf(path, "%s/%s", STORAGE_DIR, filename);
+    sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
     struct stat st;
 
     // Check if file exists
