@@ -18,4 +18,6 @@
 #define STORAGE_SERVER_IP "127.0.0.1"
 #define NAME_SERVER_IP "127.0.0.1"
 
+int get_storage_id(void);
+
 #endif

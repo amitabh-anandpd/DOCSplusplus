@@ -5,6 +5,10 @@
 #include "../../include/info.h"
 #include "../../include/stream.h"
 #include "../../include/execute.h"
+
+// Global storage server ID so helpers (e.g., write.c) can query it
+static int g_storage_id = 0;
+int get_storage_id(void) { return g_storage_id; }
 // Function to read and send file content to client
 void read_file(int client_sock, const char* filename) {
     char path[512];
@@ -169,6 +173,7 @@ int register_with_name_server() {
 int main() {
     printf("Starting Storage Server...\n");
     int ss_id = register_with_name_server();
+    g_storage_id = ss_id; // make ID available to other translation units
     initialize_storage_folders(ss_id);
     int MY_PORT = STORAGE_SERVER_PORT + ss_id;
     printf("Storage folder created: %s\n", STORAGE_BASE);
