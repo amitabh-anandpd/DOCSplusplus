@@ -62,8 +62,8 @@ void remove_lock(const char *filename, int sentence_num) {
 // --- Core WRITE logic ---
 void write_to_file(int client_sock, const char *filename, int sentence_num) {
     char path[512];
-    sprintf(path, "%s/%s", STORAGE_DIR, filename);
-
+    sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
+    printf("%s\n", path);
     FILE *fp = fopen(path, "r");
     if (!fp) {
         // Create empty file if it doesn't exist
