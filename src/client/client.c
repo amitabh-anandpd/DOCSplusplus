@@ -39,11 +39,57 @@ int main() {
         if (strcasecmp(command, "EXIT") == 0 || strcasecmp(command, "QUIT") == 0) break;
 
         // Decide where to connect: STREAM should go straight to storage server
-        if (strncmp(command, "STREAM", 6) == 0) {
-            target_port = STORAGE_SERVER_PORT;
-        } else {
-            target_port = NAME_SERVER_PORT;
-        }
+        // Special handling for STREAM command
+if (strncmp(command, "STREAM", 6) == 0) {
+    // Extract filename
+    char filename[256];
+    sscanf(command + 7, "%s", filename);
+    
+    // Step 1: Connect to Name Server to get storage server ID
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("Socket creation failed");
+        continue;
+    }
+    
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(NAME_SERVER_PORT);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    
+    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to Name Server failed");
+        close(sock);
+        continue;
+    }
+    
+    // Send INFO command to get storage server ID
+    char info_cmd[512];
+    snprintf(info_cmd, sizeof(info_cmd), "INFO %s", filename);
+    send(sock, info_cmd, strlen(info_cmd), 0);
+    
+    // Read response
+    ssize_t bytes = read(sock, buffer, sizeof(buffer) - 1);
+    buffer[bytes] = '\0';
+    close(sock);
+    
+    // Parse storage server ID
+    int ss_id = -1;
+    char *id_line = strstr(buffer, "Storage Server ID:");
+    if (id_line) {
+        sscanf(id_line, "Storage Server ID: %d", &ss_id);
+    }
+    
+    if (ss_id < 0) {
+        printf("Error: Could not find storage server for file '%s'\n", filename);
+        printf("%s\n", buffer);
+        continue;
+    }
+    
+    // Step 2: Connect to the correct storage server
+    target_port = STORAGE_SERVER_PORT + ss_id;
+} else {
+    target_port = NAME_SERVER_PORT;
+}
 
         sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) {
