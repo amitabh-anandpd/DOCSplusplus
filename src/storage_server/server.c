@@ -5,10 +5,18 @@
 #include "../../include/info.h"
 #include "../../include/stream.h"
 #include "../../include/execute.h"
+#include <signal.h>
+#include <sys/wait.h>
 
 // Global storage server ID so helpers (e.g., write.c) can query it
 static int g_storage_id = 0;
 int get_storage_id(void) { return g_storage_id; }
+
+// Reap zombie processes
+void sigchld_handler(int s) {
+    (void)s;
+    while (waitpid(-1, NULL, WNOHANG) > 0) {}
+}
 // Function to read and send file content to client
 void read_file(int client_sock, const char* filename) {
     char path[512];
@@ -177,6 +185,17 @@ int main() {
     initialize_storage_folders(ss_id);
     int MY_PORT = STORAGE_SERVER_PORT + ss_id;
     printf("Storage folder created: %s\n", STORAGE_BASE);
+    
+    // Set up signal handler to reap zombie processes
+    struct sigaction sa;
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+        perror("sigaction");
+        // not fatal, continue
+    }
+    
     int server_fd, client_sock;
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
@@ -215,6 +234,23 @@ int main() {
             perror("Accept failed");
             continue;
         }
+
+        // Fork a child process to handle this client
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork failed");
+            close(client_sock);
+            continue;
+        }
+
+        if (pid > 0) {
+            // Parent: close client socket and continue accepting
+            close(client_sock);
+            continue;
+        }
+
+        // Child process: handle the client
+        close(server_fd); // Child doesn't need the listening socket
 
         memset(buffer, 0, sizeof(buffer));
         read(client_sock, buffer, sizeof(buffer));
@@ -326,6 +362,7 @@ int main() {
         }
 
         close(client_sock);
+        exit(0); // Child process exits after handling the client
     }
 
     close(server_fd);

@@ -58,7 +58,7 @@ void list_files(int client_sock, int show_all, int show_long) {
 
         // TODO: filter based on user access if show_all == 0 (currently always listing all)
 
-        sprintf(path, "%s/%s", STORAGE_DIR, entry->d_name);
+        sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), entry->d_name);
         if (stat(path, &file_stat) != 0) {
             continue; // Skip if stat fails
         }
