@@ -432,19 +432,38 @@ int main() {
         if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) { const char *msg = "Error: connect to storage failed\n"; send(client_sock,msg,strlen(msg),0); close(storage_sock); close(client_sock); exit(0);}        
 
         // Forward original command
-        send(storage_sock, buf, strlen(buf), 0);
+        // Forward original command
+send(storage_sock, buf, strlen(buf), 0);
 
-        // WRITE command needs bidirectional proxying for interactive session
-        if (strncmp(buf, "WRITE", 5) == 0) {
-            proxy_bidirectional(client_sock, storage_sock);
-            close(storage_sock);
-            close(client_sock);
-            exit(0);
-        }
-
-        // Simple response relay until storage closes (for non-interactive commands)
-        char relay[4096]; ssize_t rcv;
-        while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { relay[rcv]='\0'; send(client_sock, relay, strlen(relay), 0); }
+// For INFO command, prepend storage server ID to response
+if (strncmp(buf, "INFO", 4) == 0) {
+    // Send storage server ID first
+    char ss_header[128];
+    snprintf(ss_header, sizeof(ss_header), "Storage Server ID: %d\n", ss_id_target);
+    send(client_sock, ss_header, strlen(ss_header), 0);
+    
+    // Then relay the rest from storage server
+    char relay[4096]; 
+    ssize_t rcv;
+    while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
+        relay[rcv]='\0'; 
+        send(client_sock, relay, strlen(relay), 0); 
+    }
+} else if (strncmp(buf, "WRITE", 5) == 0) {
+    // WRITE command needs bidirectional proxying for interactive session
+    proxy_bidirectional(client_sock, storage_sock);
+    close(storage_sock);
+    close(client_sock);
+    exit(0);
+} else {
+    // Simple response relay until storage closes (for non-interactive commands)
+    char relay[4096]; 
+    ssize_t rcv;
+    while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
+        relay[rcv]='\0'; 
+        send(client_sock, relay, strlen(relay), 0); 
+    }
+}
 
         // Update file index on CREATE success (naive: if response contains "Success:")
         if (strncmp(buf, "CREATE", 6)==0 && filename[0]) {
