@@ -319,12 +319,13 @@ int main() {
             int sentence_num;
             if (sscanf(buffer + 6, "%s %d", filename, &sentence_num) == 2) {
                 write_to_file(client_sock, filename, sentence_num);
+                // write_to_file handles the interactive loop internally
+                // and will complete when user sends ETIRW
             } else {
                 char msg[] = "Usage: WRITE <filename> <sentence_number>\n";
                 send(client_sock, msg, strlen(msg), 0);
             }
-            close(client_sock);
-            continue;
+            // Don't close or continue here - fall through to normal cleanup
         }
         else if (strncmp(buffer, "INFO ", 5) == 0) {
             char filename[256];

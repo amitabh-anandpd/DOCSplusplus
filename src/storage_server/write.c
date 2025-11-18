@@ -138,8 +138,21 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
     send(client_sock, msg, strlen(msg), 0);
 
     while (1) {
-        char recv_buf[1024] = {0};
-        read(client_sock, recv_buf, sizeof(recv_buf));
+        char recv_buf[1024];
+        memset(recv_buf, 0, sizeof(recv_buf));
+        ssize_t n = read(client_sock, recv_buf, sizeof(recv_buf) - 1);
+        
+        if (n <= 0) {
+            // Connection closed or error
+            remove_lock(filename, sentence_num);
+            return;
+        }
+        
+        recv_buf[n] = '\0';
+        
+        // Remove trailing newline/carriage return
+        recv_buf[strcspn(recv_buf, "\n")] = '\0';
+        recv_buf[strcspn(recv_buf, "\r")] = '\0';
 
         // ETIRW → finish
         if (strncmp(recv_buf, "ETIRW", 5) == 0) {

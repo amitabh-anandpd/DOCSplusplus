@@ -434,7 +434,15 @@ int main() {
         // Forward original command
         send(storage_sock, buf, strlen(buf), 0);
 
-        // Simple response relay until storage closes
+        // WRITE command needs bidirectional proxying for interactive session
+        if (strncmp(buf, "WRITE", 5) == 0) {
+            proxy_bidirectional(client_sock, storage_sock);
+            close(storage_sock);
+            close(client_sock);
+            exit(0);
+        }
+
+        // Simple response relay until storage closes (for non-interactive commands)
         char relay[4096]; ssize_t rcv;
         while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { relay[rcv]='\0'; send(client_sock, relay, strlen(relay), 0); }
 
