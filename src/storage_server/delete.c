@@ -8,7 +8,7 @@ int delete_from_storage(int client_sock, const char *filename) {
     }
 
     char filepath[512];
-    int written = snprintf(filepath, sizeof(filepath), "%s/%s", STORAGE_DIR, filename);
+    int written = snprintf(filepath, sizeof(filepath), "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
 
     if (written < 0 || written >= (int)sizeof(filepath)) {
         fprintf(stderr, "delete_from_storage: path too long\n");

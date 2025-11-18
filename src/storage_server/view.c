@@ -35,7 +35,11 @@ void list_files(int client_sock, int show_all, int show_long) {
     char path[512], response[8192]; // larger buffer
     struct passwd *pwd;
 
-    dir = opendir(STORAGE_DIR);
+    // Open per-server files directory
+    char server_files_dir[512];
+    sprintf(server_files_dir, "%s/storage%d/files", STORAGE_DIR, get_storage_id());
+    
+    dir = opendir(server_files_dir);
     if (!dir) {
         sprintf(response, "Error: Cannot open storage directory\n");
         send(client_sock, response, strlen(response), 0);
