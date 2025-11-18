@@ -156,6 +156,7 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
 
         // ETIRW → finish
         if (strncmp(recv_buf, "ETIRW", 5) == 0) {
+            // Update the sentence we were editing
             strcpy(sentences[sentence_num], working_sentence);
             
             // If this was a new sentence at the end, increment count
@@ -163,8 +164,10 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
                 sentence_count = sentence_num + 1;
             }
             
-            // Ensure non-empty content
-            if (strlen(working_sentence) == 0) working_sentence[0] = '.';
+            // Ensure non-empty content (add delimiter if missing)
+            if (strlen(working_sentence) == 0) {
+                strcpy(sentences[sentence_num], ".");
+            }
 
             // Recombine file
             fp = fopen(path, "w");
@@ -174,9 +177,14 @@ void write_to_file(int client_sock, const char *filename, int sentence_num) {
                 remove_lock(filename, sentence_num);
                 return;
             }
+            
+            // Write all sentences
             for (int i = 0; i < sentence_count; i++) {
                 fprintf(fp, "%s", sentences[i]);
-                if (i < sentence_count - 1) fprintf(fp, " ");
+                // Add space between sentences (but not after the last one)
+                if (i < sentence_count - 1) {
+                    fprintf(fp, " ");
+                }
             }
             fclose(fp);
 
