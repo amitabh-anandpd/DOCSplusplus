@@ -36,18 +36,51 @@ static int num_file_entries = 0;
 
 // Add a storage server entry and return its id, or -1 on failure
 static int add_storage_server(const char *ip, int nm_port, int client_port_from_reg, const char *files) {
+    // Step 1: Ping all registered storage servers and remove any that are unreachable
+    int i = 0;
+    while (i < num_storage_servers) {
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) { ++i; continue; }
+        struct sockaddr_in sa;
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(storage_servers[i].client_port);
+        sa.sin_addr.s_addr = inet_addr(storage_servers[i].ip);
+        struct timeval tv; tv.tv_sec = 0; tv.tv_usec = 300000; // 300ms timeout
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+        int res = connect(sock, (struct sockaddr*)&sa, sizeof(sa));
+        close(sock);
+        if (res < 0) {
+            // Remove this server
+            for (int j = i; j < num_storage_servers - 1; ++j) storage_servers[j] = storage_servers[j + 1];
+            num_storage_servers--;
+            // Do not increment i, as we just shifted
+        } else {
+            ++i;
+        }
+    }
+
     if (num_storage_servers >= MAX_SS) return -1;
+    // Step 2: Assign lowest available id
+    int used_ids[MAX_SS+1] = {0};
+    for (int k = 0; k < num_storage_servers; ++k) {
+        if (storage_servers[k].id > 0 && storage_servers[k].id <= MAX_SS) {
+            used_ids[storage_servers[k].id] = 1;
+        }
+    }
+    int id = 1;
+    for (; id <= MAX_SS; ++id) {
+        if (!used_ids[id]) break;
+    }
+    if (id > MAX_SS) return -1;
+
     int idx = num_storage_servers;
-    int id = idx + 1; // ss_id starts from 1
     storage_servers[idx].id = id;
     strncpy(storage_servers[idx].ip, ip ? ip : "127.0.0.1", sizeof(storage_servers[idx].ip)-1);
     storage_servers[idx].nm_port = nm_port;
-    // Derive client port if registration didn't know its final one yet.
-    // Current storage server implementation listens on STORAGE_SERVER_PORT + ss_id
     if (client_port_from_reg <= 0) {
         storage_servers[idx].client_port = STORAGE_SERVER_PORT + id;
     } else {
-        // Trust the provided port but fallback to derived pattern if it equals base
         storage_servers[idx].client_port = (client_port_from_reg == STORAGE_SERVER_PORT) ? (STORAGE_SERVER_PORT + id) : client_port_from_reg;
     }
     storage_servers[idx].last_seen = time(NULL);
@@ -66,16 +99,13 @@ static int add_storage_server(const char *ip, int nm_port, int client_port_from_
         char *save = NULL;
         char *tok = strtok_r(buf, ",", &save);
         while (tok) {
-            // trim leading/trailing whitespace
             while (*tok == ' ' || *tok == '\t') tok++;
             char *end = tok + strlen(tok) - 1;
             while (end > tok && (*end == ' ' || *end == '\t')) { *end = '\0'; end--; }
             if (*tok) {
-                // find or add entry
                 int found = 0;
                 for (int i = 0; i < num_file_entries; ++i) {
                     if (strcmp(file_index[i].name, tok) == 0) {
-                        // add ss id if not present
                         int already = 0;
                         for (int j = 0; j < file_index[i].ss_count; ++j) if (file_index[i].ss_ids[j] == id) { already = 1; break; }
                         if (!already && file_index[i].ss_count < MAX_SS_PER_FILE) file_index[i].ss_ids[file_index[i].ss_count++] = id;
