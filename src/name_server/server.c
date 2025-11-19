@@ -121,7 +121,7 @@ void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
     }
     if (conn_res == 0) {
         // Send VIEW command with authentication (use root/root or valid admin user)
-        const char *view_cmd = "USER:root\nPASS:root\nCMD:VIEW\n";
+        const char *view_cmd = "USER:admin\nPASS:admin123\nCMD:VIEW\n";
         send(ss_sock, view_cmd, strlen(view_cmd), 0);
         char view_buf[8192] = {0};
         ssize_t n = recv(ss_sock, view_buf, sizeof(view_buf)-1, 0);
