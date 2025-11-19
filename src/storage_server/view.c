@@ -1,5 +1,6 @@
 #include "../../include/common.h"
 #include "../../include/view.h"
+#include "../../include/acl.h"  // ADD THIS - to use check_read_access()
 
 // Function to count words and characters in a file
 void count_file(const char* path, int* words, int* chars) {
@@ -9,12 +10,10 @@ void count_file(const char* path, int* words, int* chars) {
         *chars = 0;
         return;
     }
-
     int c;
     int in_word = 0;
     *words = 0;
     *chars = 0;
-
     while ((c = fgetc(fp)) != EOF) {
         (*chars)++;
         if (c == ' ' || c == '\n' || c == '\t') {
@@ -24,17 +23,18 @@ void count_file(const char* path, int* words, int* chars) {
             (*words)++;
         }
     }
-
     fclose(fp);
 }
+
 // Function to list files
-void list_files(int client_sock, int show_all, int show_long) {
+// MODIFY THIS FUNCTION - add username parameter
+void list_files(int client_sock, int show_all, int show_long, const char* username) {
     DIR *dir;
     struct dirent *entry;
     struct stat file_stat;
-    char path[512], response[8192]; // larger buffer
+    char path[512], response[8192];
     struct passwd *pwd;
-
+    
     // Open per-server files directory
     char server_files_dir[512];
     sprintf(server_files_dir, "%s/storage%d/files", STORAGE_DIR, get_storage_id());
@@ -45,40 +45,44 @@ void list_files(int client_sock, int show_all, int show_long) {
         send(client_sock, response, strlen(response), 0);
         return;
     }
-
+    
     strcpy(response, "");
-
+    
     // If showing long format, print the header
     if (show_long) {
         strcat(response, "---------------------------------------------------------\n");
         strcat(response, "|  Filename  | Words | Chars | Last Access Time | Owner |\n");
         strcat(response, "|------------|-------|-------|------------------|-------|\n");
     }
-
+    
+    int file_count = 0;  // Track how many files user can see
+    
     while ((entry = readdir(dir)) != NULL) {
         // Skip . and ..
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
-
-        // TODO: filter based on user access if show_all == 0 (currently always listing all)
-
+        
+        // ADD THIS: Check if user has read access to this file
+        if (!show_all && !check_read_access(entry->d_name, username)) {
+            continue;  // Skip files user doesn't have access to
+        }
+        
         sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), entry->d_name);
         if (stat(path, &file_stat) != 0) {
-            continue; // Skip if stat fails
+            continue;
         }
-
+        
         if (show_long) {
             int word_count = 0, char_count = 0;
             count_file(path, &word_count, &char_count);
-
+            
             char access_time[64];
             strftime(access_time, sizeof(access_time), "%Y-%m-%d %H:%M",
                      localtime(&file_stat.st_atime));
-
-            // Get owner name
+            
             pwd = getpwuid(file_stat.st_uid);
             const char *owner = pwd ? pwd->pw_name : "unknown";
-
+            
             char line[512];
             sprintf(line, "| %-10s| %-5d | %-5d | %-16s | %-5s |\n",
                     entry->d_name, word_count, char_count, access_time, owner);
@@ -87,12 +91,15 @@ void list_files(int client_sock, int show_all, int show_long) {
             strcat(response, entry->d_name);
             strcat(response, "\n");
         }
+        
+        file_count++;
     }
-
+    
     closedir(dir);
-
-    if (strlen(response) == 0)
-        strcpy(response, "(no files found)\n");
-
+    
+    if (file_count == 0) {
+        strcpy(response, "(no files found or no access)\n");
+    }
+    
     send(client_sock, response, strlen(response), 0);
 }
