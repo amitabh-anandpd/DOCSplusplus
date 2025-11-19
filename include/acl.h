@@ -8,6 +8,7 @@ typedef struct {
     char owner[64];
     time_t created_time;
     time_t last_accessed;
+    time_t last_modified;
     char read_users[512];   // comma-separated list of users with read access
     char write_users[512];  // comma-separated list of users with write access
 } FileMetadata;
