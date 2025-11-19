@@ -447,20 +447,7 @@ int main() {
             exit(0);
         }
 
-        // Helper lambdas (C99: use static inline functions via blocks of code)
-        int choose_ss_for_file(const char *filename) {
-            FileMeta *meta = find_filemeta(filename);
-            if (meta && meta->ss_count > 0) {
-                // pick first active; could round-robin later
-                for (int i = 0; i < meta->ss_count; ++i) {
-                    StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[i]);
-                    if (ssi && ssi->active) return ssi->id;
-                }
-            }
-            // fallback: first active storage server
-            for (int i = 0; i < num_storage_servers; ++i) if (storage_servers[i].active) return storage_servers[i].id;
-            return -1;
-        }
+
 
         // VIEW must go to all storage servers and aggregate
         if (strncmp(buf, "VIEW", 4) == 0) {
@@ -502,7 +489,19 @@ int main() {
                 close(client_sock);
                 exit(0);
             }
-            int ss_id = choose_ss_for_file(filename);
+            int ss_id = -1;
+            FileMeta *meta = find_filemeta(filename);
+            if (meta && meta->ss_count > 0) {
+                for (int i = 0; i < meta->ss_count; ++i) {
+                    StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[i]);
+                    if (ssi && ssi->active) { ss_id = ssi->id; break; }
+                }
+            }
+            if (ss_id < 0) {
+                for (int i = 0; i < num_storage_servers; ++i) {
+                    if (storage_servers[i].active) { ss_id = storage_servers[i].id; break; }
+                }
+            }
             if (ss_id < 0) {
                 const char *msg = "Error: No storage server available\n";
                 send(client_sock, msg, strlen(msg), 0);
@@ -564,16 +563,23 @@ int main() {
             if (sscanf(file_part, " %255s", filename) == 1) {
                 // For CREATE if file doesn't exist yet choose a server via simple round-robin
                 FileMeta *meta = find_filemeta(filename);
-                if (meta) {
-                    ss_id_target = choose_ss_for_file(filename);
+                if (meta && meta->ss_count > 0) {
+                    for (int i = 0; i < meta->ss_count; ++i) {
+                        StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[i]);
+                        if (ssi && ssi->active) { ss_id_target = ssi->id; break; }
+                    }
                 } else if (strncmp(buf, "CREATE", 6)==0) {
                     // round-robin
                     static int rr = 0;
                     for (int attempts=0; attempts< num_storage_servers; ++attempts) {
-                        int idx = (rr + attempts) % num_storage_servers; if (storage_servers[idx].active) { ss_id_target = storage_servers[idx].id; rr = (idx+1)%num_storage_servers; break; }
+                        int idx = (rr + attempts) % num_storage_servers;
+                        if (storage_servers[idx].active) { ss_id_target = storage_servers[idx].id; rr = (idx+1)%num_storage_servers; break; }
                     }
                 } else {
-                    ss_id_target = choose_ss_for_file(filename);
+                    // fallback: first active storage server
+                    for (int i = 0; i < num_storage_servers; ++i) {
+                        if (storage_servers[i].active) { ss_id_target = storage_servers[i].id; break; }
+                    }
                 }
             }
         }
@@ -596,35 +602,35 @@ int main() {
         snprintf(auth_cmd, sizeof(auth_cmd), "USER:%s\nPASS:%s\nCMD:%s", username, password, buf);
         send(storage_sock, auth_cmd, strlen(auth_cmd), 0);
 
-// For INFO command, prepend storage server ID to response
-if (strncmp(buf, "INFO", 4) == 0) {
-    // Send storage server ID first
-    char ss_header[128];
-    snprintf(ss_header, sizeof(ss_header), "Storage Server ID: %d\n", ss_id_target);
-    send(client_sock, ss_header, strlen(ss_header), 0);
-    
-    // Then relay the rest from storage server
-    char relay[4096]; 
-    ssize_t rcv;
-    while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
-        relay[rcv]='\0'; 
-        send(client_sock, relay, strlen(relay), 0); 
-    }
-} else if (strncmp(buf, "WRITE", 5) == 0) {
-    // WRITE command needs bidirectional proxying for interactive session
-    proxy_bidirectional(client_sock, storage_sock);
-    close(storage_sock);
-    close(client_sock);
-    exit(0);
-} else {
-    // Simple response relay until storage closes (for non-interactive commands)
-    char relay[4096]; 
-    ssize_t rcv;
-    while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
-        relay[rcv]='\0'; 
-        send(client_sock, relay, strlen(relay), 0); 
-    }
-}
+        // For INFO command, prepend storage server ID to response
+        if (strncmp(buf, "INFO", 4) == 0) {
+            // Send storage server ID first
+            char ss_header[128];
+            snprintf(ss_header, sizeof(ss_header), "Storage Server ID: %d\n", ss_id_target);
+            send(client_sock, ss_header, strlen(ss_header), 0);
+            
+            // Then relay the rest from storage server
+            char relay[4096]; 
+            ssize_t rcv;
+            while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
+                relay[rcv]='\0'; 
+                send(client_sock, relay, strlen(relay), 0); 
+            }
+        } else if (strncmp(buf, "WRITE", 5) == 0) {
+            // WRITE command needs bidirectional proxying for interactive session
+            proxy_bidirectional(client_sock, storage_sock);
+            close(storage_sock);
+            close(client_sock);
+            exit(0);
+        } else {
+            // Simple response relay until storage closes (for non-interactive commands)
+            char relay[4096]; 
+            ssize_t rcv;
+            while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
+                relay[rcv]='\0'; 
+                send(client_sock, relay, strlen(relay), 0); 
+            }
+        }
 
         // Update file index on CREATE success (naive: if response contains "Success:")
         if (strncmp(buf, "CREATE", 6)==0 && filename[0]) {
