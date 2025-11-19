@@ -27,7 +27,83 @@ static int num_storage_servers = 0;
 
 
 static FileIndex file_index;
-
+void refresh_filemeta_from_storage(const char *filename, int ss_id) {
+    StorageServerInfo *ssi = NULL;
+    for (int i = 0; i < num_storage_servers; ++i) {
+        if (storage_servers[i].id == ss_id) {
+            ssi = &storage_servers[i];
+            break;
+        }
+    }
+    if (!ssi) return;
+    int ss_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (ss_sock < 0) return;
+    struct sockaddr_in sa;
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(ssi->client_port);
+    sa.sin_addr.s_addr = inet_addr(ssi->ip);
+    struct timeval tv; tv.tv_sec = 1; tv.tv_usec = 0;
+    setsockopt(ss_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+    setsockopt(ss_sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+    if (connect(ss_sock, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+        close(ss_sock);
+        return;
+    }
+    char info_cmd[512];
+    snprintf(info_cmd, sizeof(info_cmd), "USER:admin\nPASS:admin123\nCMD:INFO %s\n", filename);
+    send(ss_sock, info_cmd, strlen(info_cmd), 0);
+    char info_buf[2048] = {0};
+    ssize_t n = recv(ss_sock, info_buf, sizeof(info_buf)-1, 0);
+    if (n > 0) {
+        info_buf[n] = '\0';
+        FileMeta meta = {0};
+        strncpy(meta.name, filename, sizeof(meta.name)-1);
+        meta.ss_ids[0] = ss_id;
+        meta.ss_count = 1;
+        // Parse fields from info_buf (simple parsing)
+        char *p = strstr(info_buf, "Owner          : ");
+        if (p) sscanf(p, "Owner          : %63[^\n]", meta.owner);
+        p = strstr(info_buf, "Created        : ");
+        if (p) {
+            char tbuf[64];
+            if (sscanf(p, "Created        : %63[^\n]", tbuf) == 1) {
+                struct tm tm; if (strptime(tbuf, "%Y-%m-%d %H:%M:%S", &tm)) meta.created_time = mktime(&tm);
+            }
+        }
+        p = strstr(info_buf, "Last Modified  : ");
+        if (p) {
+            char tbuf[64];
+            if (sscanf(p, "Last Modified  : %63[^\n]", tbuf) == 1) {
+                struct tm tm; if (strptime(tbuf, "%Y-%m-%d %H:%M:%S", &tm)) meta.last_modified = mktime(&tm);
+            }
+        }
+        p = strstr(info_buf, "Last Access    : ");
+        if (p) {
+            char tbuf[64];
+            if (sscanf(p, "Last Access    : %63[^\n]", tbuf) == 1) {
+                struct tm tm; if (strptime(tbuf, "%Y-%m-%d %H:%M:%S", &tm)) meta.last_accessed = mktime(&tm);
+            }
+        }
+        p = strstr(info_buf, "Read Access    : ");
+        if (p) sscanf(p, "Read Access    : %511[^\n]", meta.read_users);
+        p = strstr(info_buf, "Write Access   : ");
+        if (p) sscanf(p, "Write Access   : %511[^\n]", meta.write_users);
+        // Insert or update in hashmap
+        FileMeta *existing = file_index_get(&file_index, meta.name);
+        if (!existing) {
+            FileMeta *newmeta = malloc(sizeof(FileMeta));
+            *newmeta = meta;
+            unsigned long h = hash_filename(meta.name) % file_index.num_buckets;
+            newmeta->next = file_index.buckets[h];
+            file_index.buckets[h] = newmeta;
+        } else {
+            // Update all fields
+            *existing = meta;
+        }
+        log_event(LOG_INFO, "[SYNC] Refreshed metadata for '%s' from SS %d", filename, ss_id);
+    }
+    close(ss_sock);
+}
 // Update file index from a storage server by sending VIEW and parsing the result
 void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
     int ss_sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -1070,6 +1146,29 @@ int main() {
         } else if (strncmp(buf, "WRITE", 5) == 0) {
             // WRITE command needs bidirectional proxying for interactive session
             proxy_bidirectional(client_sock, storage_sock);
+            // After WRITE, refresh metadata from storage server
+            char filename[256] = "";
+            sscanf(buf + 5, "%255s", filename);
+            if (filename[0] != '\0') {
+                refresh_filemeta_from_storage(filename, ss_id_target);
+            }
+            close(storage_sock);
+            close(client_sock);
+            exit(0);
+        } else if (strncmp(buf, "READ", 4) == 0) {
+            // READ command: relay response, then refresh metadata
+            char filename[256] = "";
+            sscanf(buf + 4, "%255s", filename);
+            // Simple response relay until storage closes (for non-interactive commands)
+            char relay[4096]; 
+            ssize_t rcv;
+            while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
+                relay[rcv]='\0'; 
+                send(client_sock, relay, strlen(relay), 0); 
+            }
+            if (filename[0] != '\0') {
+                refresh_filemeta_from_storage(filename, ss_id_target);
+            }
             close(storage_sock);
             close(client_sock);
             exit(0);
