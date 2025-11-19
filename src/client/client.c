@@ -102,6 +102,7 @@ int main() {
     printf("  │ STREAM <filename>   │  EXEC <filename>                          │\n");
     printf("  │ ADDACCESS -R|-W <filename> <username>  │  REMACCESS <filename> <username> │\n");
     printf("  │ EXIT or QUIT - Leave the client                                 │\n");
+    printf("  │ LIST                                │\n");
     printf("  └─────────────────────────────────────────────────────────────────┘\n");
     printf("\n");
 
