@@ -1,9 +1,18 @@
 #include "../../include/common.h"
 #include <sys/socket.h> // for send()
 #include "../../include/execute.h"
+#include "../../include/acl.h"
 
 
-void execute_file(int client_sock, const char* filename) {
+void execute_file(int client_sock, const char* filename, const char *username) {
+   // Check read access
+   if (!check_read_access(filename, username)) {
+       char msg[256];
+       snprintf(msg, sizeof(msg), "ERROR: Access denied. You do not have permission to execute '%s'.\n", filename);
+       send(client_sock, msg, strlen(msg), 0);
+       return;
+   }
+   
    char path[512];
    snprintf(path, sizeof(path), "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
 

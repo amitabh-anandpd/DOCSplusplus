@@ -5,6 +5,7 @@
 #include "../../include/info.h"
 #include "../../include/stream.h"
 #include "../../include/execute.h"
+#include "../../include/acl.h"
 #include <signal.h>
 #include <sys/wait.h>
 
@@ -18,10 +19,18 @@ void sigchld_handler(int s) {
     while (waitpid(-1, NULL, WNOHANG) > 0) {}
 }
 // Function to read and send file content to client
-void read_file(int client_sock, const char* filename) {
+void read_file(int client_sock, const char* filename, const char* username) {
     char path[512];
     char response[8192];
     FILE *fp;
+    
+    // Check read access
+    if (!check_read_access(filename, username)) {
+        sprintf(response, "Error: Access denied. You do not have read permission for '%s'\n", filename);
+        send(client_sock, response, strlen(response), 0);
+        return;
+    }
+    
     // Construct full path
     sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
     
@@ -39,6 +48,13 @@ void read_file(int client_sock, const char* filename) {
     
     fclose(fp);
     
+    // Update last access time
+    FileMetadata meta;
+    if (read_metadata_file(filename, &meta) == 0) {
+        meta.last_accessed = time(NULL);
+        update_metadata_file(filename, &meta);
+    }
+    
     // Send content to client
     if (bytes_read == 0) {
         sprintf(response, "(File '%s' is empty)\n", filename);
@@ -49,7 +65,7 @@ void read_file(int client_sock, const char* filename) {
 
 
 // Function to create an empty file
-void create_file(int client_sock, const char* filename) {
+void create_file(int client_sock, const char* filename, const char* username) {
     char path[512];
     char response[256];
     FILE *fp;
@@ -75,6 +91,13 @@ void create_file(int client_sock, const char* filename) {
     }
     
     fclose(fp);
+    
+    // Create metadata file
+    if (create_metadata_file(filename, username) < 0) {
+        sprintf(response, "Warning: File '%s' created but metadata creation failed\n", filename);
+        send(client_sock, response, strlen(response), 0);
+        return;
+    }
     
     sprintf(response, "Success: File '%s' created successfully\n", filename);
     send(client_sock, response, strlen(response), 0);
@@ -259,11 +282,32 @@ int main() {
         memset(buffer, 0, sizeof(buffer));
         read(client_sock, buffer, sizeof(buffer));
 
+        // Parse authentication credentials
+        char username[64] = "", password[64] = "", command[1024] = "";
+        char *line_ptr = buffer;
+        char *saveptr_auth = NULL;
+        char *auth_line = strtok_r(line_ptr, "\n", &saveptr_auth);
+        while (auth_line) {
+            if (strncmp(auth_line, "USER:", 5) == 0) {
+                strncpy(username, auth_line + 5, sizeof(username) - 1);
+            } else if (strncmp(auth_line, "PASS:", 5) == 0) {
+                strncpy(password, auth_line + 5, sizeof(password) - 1);
+            } else if (strncmp(auth_line, "CMD:", 4) == 0) {
+                strncpy(command, auth_line + 4, sizeof(command) - 1);
+                break;
+            }
+            auth_line = strtok_r(NULL, "\n", &saveptr_auth);
+        }
+
+        // Use command from here on
+        strncpy(buffer, command, sizeof(buffer) - 1);
+        buffer[sizeof(buffer) - 1] = '\0';
+
         // Remove newline / carriage return
         buffer[strcspn(buffer, "\n")] = 0;
         buffer[strcspn(buffer, "\r")] = 0;
 
-        printf("Command received: '%s'\n", buffer);
+        printf("Command received from '%s': '%s'\n", username, buffer);
         //printf("Buffer bytes: ");
         // for (int i = 0; i < strlen(buffer); i++) {
         //     printf("[%c:%d] ", buffer[i], buffer[i]);
@@ -287,7 +331,7 @@ int main() {
                 char msg[] = "Error: Please specify a filename\n";
                 send(client_sock, msg, strlen(msg), 0);
             } else {
-                read_file(client_sock, filename);
+                read_file(client_sock, filename, username);
             }
         } 
         else if (strncmp(buffer, "CREATE ", 7) == 0) {
@@ -299,7 +343,7 @@ int main() {
                 char msg[] = "Error: Please specify a filename\n";
                 send(client_sock, msg, strlen(msg), 0);
             } else {
-                create_file(client_sock, filename);
+                create_file(client_sock, filename, username);
             }
         }
         else if (strncmp(buffer, "DELETE ", 7) == 0) {
@@ -311,14 +355,14 @@ int main() {
                 char msg[] = "Error: Please specify a filename\n";
                 send(client_sock, msg, strlen(msg), 0);
             } else {
-                delete_from_storage(client_sock, filename);
+                delete_from_storage(client_sock, filename, username);
             }
         }
         else if (strncmp(buffer, "WRITE ", 6) == 0) {
             char filename[256];
             int sentence_num;
             if (sscanf(buffer + 6, "%s %d", filename, &sentence_num) == 2) {
-                write_to_file(client_sock, filename, sentence_num);
+                write_to_file(client_sock, filename, sentence_num, username);
                 // write_to_file handles the interactive loop internally
                 // and will complete when user sends ETIRW
             } else {
@@ -335,7 +379,7 @@ int main() {
                 char msg[] = "Error: Please specify a filename\n";
                 send(client_sock, msg, strlen(msg), 0);
             } else {
-                file_info(client_sock, filename);
+                file_info(client_sock, filename, username);
             }
         }
         else if (strncmp(buffer, "STREAM ", 7) == 0) {
@@ -346,7 +390,7 @@ int main() {
                 char msg[] = "Error: Please specify a filename\n";
                 send(client_sock, msg, strlen(msg), 0);
             } else {
-                stream_file(client_sock, filename);
+                stream_file(client_sock, filename, username);
             }
         }
         else if (strncmp(buffer, "EXEC ", 5) == 0) {
@@ -357,7 +401,72 @@ int main() {
                 char msg[] = "Error: Please specify a filename\n";
                 send(client_sock, msg, strlen(msg), 0);
             } else {
-                execute_file(client_sock, filename);
+                execute_file(client_sock, filename, username);
+            }
+        }
+        else if (strncmp(buffer, "ADDACCESS ", 10) == 0) {
+            // Parse: ADDACCESS -R|-W <filename> <target_username>
+            char flag[8], filename[256], target_user[64];
+            char response[512];
+            if (sscanf(buffer + 10, "%s %s %s", flag, filename, target_user) == 3) {
+                // Check if requester is the owner
+                FileMetadata meta;
+                if (read_metadata_file(filename, &meta) < 0) {
+                    snprintf(response, sizeof(response), "Error: File '%s' not found or no metadata\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else if (strcmp(meta.owner, username) != 0) {
+                    snprintf(response, sizeof(response), "Error: Only the owner can grant access to '%s'\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else {
+                    if (strcmp(flag, "-R") == 0) {
+                        if (add_read_access(filename, target_user) == 0) {
+                            snprintf(response, sizeof(response), "Success: Read access granted to '%s' for file '%s'\n", target_user, filename);
+                        } else {
+                            snprintf(response, sizeof(response), "Error: Failed to grant read access\n");
+                        }
+                    } else if (strcmp(flag, "-W") == 0) {
+                        if (add_write_access(filename, target_user) == 0) {
+                            snprintf(response, sizeof(response), "Success: Write access granted to '%s' for file '%s'\n", target_user, filename);
+                        } else {
+                            snprintf(response, sizeof(response), "Error: Failed to grant write access\n");
+                        }
+                    } else {
+                        snprintf(response, sizeof(response), "Error: Invalid flag '%s'. Use -R for read or -W for write\n", flag);
+                    }
+                    send(client_sock, response, strlen(response), 0);
+                }
+            } else {
+                char msg[] = "Usage: ADDACCESS -R|-W <filename> <username>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            }
+        }
+        else if (strncmp(buffer, "REMACCESS ", 10) == 0) {
+            // Parse: REMACCESS <filename> <target_username>
+            char filename[256], target_user[64];
+            char response[512];
+            if (sscanf(buffer + 10, "%s %s", filename, target_user) == 2) {
+                // Check if requester is the owner
+                FileMetadata meta;
+                if (read_metadata_file(filename, &meta) < 0) {
+                    snprintf(response, sizeof(response), "Error: File '%s' not found or no metadata\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else if (strcmp(meta.owner, username) != 0) {
+                    snprintf(response, sizeof(response), "Error: Only the owner can revoke access to '%s'\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else {
+                    int result = remove_all_access(filename, target_user);
+                    if (result == 0) {
+                        snprintf(response, sizeof(response), "Success: All access revoked for '%s' on file '%s'\n", target_user, filename);
+                    } else if (result == -2) {
+                        snprintf(response, sizeof(response), "Error: Cannot revoke owner's access\n");
+                    } else {
+                        snprintf(response, sizeof(response), "Error: Failed to revoke access\n");
+                    }
+                    send(client_sock, response, strlen(response), 0);
+                }
+            } else {
+                char msg[] = "Usage: REMACCESS <filename> <username>\n";
+                send(client_sock, msg, strlen(msg), 0);
             }
         }
 

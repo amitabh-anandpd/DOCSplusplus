@@ -252,6 +252,61 @@ int main() {
         if (peek_n < 0) peek_n = 0;
         peek[peek_n] = '\0';
 
+        // If this is an authentication request, handle it in parent
+        if (peek_n > 6 && strstr(peek, "TYPE:AUTH") == peek) {
+            // read the full authentication message (consume it)
+            char authbuf[8192];
+            ssize_t rn = recv(client_sock, authbuf, sizeof(authbuf)-1, 0);
+            if (rn < 0) rn = 0;
+            authbuf[rn] = '\0';
+
+            // parse authentication lines
+            char *saveptr_auth = NULL;
+            char *line = strtok_r(authbuf, "\n", &saveptr_auth);
+            char username[64] = "";
+            char password[64] = "";
+            while (line) {
+                if (strncmp(line, "USER:", 5) == 0) {
+                    strncpy(username, line + 5, sizeof(username) - 1);
+                } else if (strncmp(line, "PASS:", 5) == 0) {
+                    strncpy(password, line + 5, sizeof(password) - 1);
+                }
+                line = strtok_r(NULL, "\n", &saveptr_auth);
+            }
+
+            // Verify credentials against storage/users.txt
+            int authenticated = 0;
+            FILE *users_file = fopen("storage/users.txt", "r");
+            if (users_file) {
+                char userline[256];
+                while (fgets(userline, sizeof(userline), users_file)) {
+                    userline[strcspn(userline, "\n")] = 0;
+                    if (userline[0] == '#' || strlen(userline) == 0) continue;
+                    char *colon = strchr(userline, ':');
+                    if (colon) {
+                        *colon = '\0';
+                        char *file_user = userline;
+                        char *file_pass = colon + 1;
+                        if (strcmp(file_user, username) == 0 && strcmp(file_pass, password) == 0) {
+                            authenticated = 1;
+                            break;
+                        }
+                    }
+                }
+                fclose(users_file);
+            }
+
+            char auth_resp[128];
+            if (authenticated) {
+                snprintf(auth_resp, sizeof(auth_resp), "AUTH:SUCCESS\n");
+            } else {
+                snprintf(auth_resp, sizeof(auth_resp), "AUTH:FAILED\n");
+            }
+            send(client_sock, auth_resp, strlen(auth_resp), 0);
+            close(client_sock);
+            continue;
+        }
+
         // If this is a registration from a storage server, read and store it in parent
         if (peek_n > 6 && strstr(peek, "TYPE:REGISTER_SS") == peek) {
             // read the full registration message (consume it)
@@ -323,6 +378,57 @@ int main() {
             exit(0);
         }
 
+        // Parse authentication credentials
+        char username[64] = "", password[64] = "", command[4096] = "";
+        char *line_ptr = buf;
+        char *saveptr_auth = NULL;
+        char *auth_line = strtok_r(line_ptr, "\n", &saveptr_auth);
+        while (auth_line) {
+            if (strncmp(auth_line, "USER:", 5) == 0) {
+                strncpy(username, auth_line + 5, sizeof(username) - 1);
+            } else if (strncmp(auth_line, "PASS:", 5) == 0) {
+                strncpy(password, auth_line + 5, sizeof(password) - 1);
+            } else if (strncmp(auth_line, "CMD:", 4) == 0) {
+                strncpy(command, auth_line + 4, sizeof(command) - 1);
+                break; // command is the last line we care about
+            }
+            auth_line = strtok_r(NULL, "\n", &saveptr_auth);
+        }
+
+        // Verify credentials against storage/users.txt
+        int authenticated = 0;
+        FILE *users_file = fopen("storage/users.txt", "r");
+        if (users_file) {
+            char line[256];
+            while (fgets(line, sizeof(line), users_file)) {
+                line[strcspn(line, "\n")] = 0;
+                if (line[0] == '#' || strlen(line) == 0) continue; // skip comments/empty
+                char *colon = strchr(line, ':');
+                if (colon) {
+                    *colon = '\0';
+                    char *file_user = line;
+                    char *file_pass = colon + 1;
+                    if (strcmp(file_user, username) == 0 && strcmp(file_pass, password) == 0) {
+                        authenticated = 1;
+                        break;
+                    }
+                }
+            }
+            fclose(users_file);
+        }
+
+        if (!authenticated && strlen(username) > 0) {
+            const char *msg = "Error: Authentication failed. Invalid username or password.\n";
+            send(client_sock, msg, strlen(msg), 0);
+            close(client_sock);
+            exit(0);
+        }
+
+        // Use command from here on (replace buf references)
+        strncpy(buf, command, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        n = strlen(buf);
+
         // Helper lambdas (C99: use static inline functions via blocks of code)
         int choose_ss_for_file(const char *filename) {
             FileEntry *fe = find_fileentry(filename);
@@ -349,8 +455,10 @@ int main() {
                 if (ss_sock < 0) continue;
                 struct sockaddr_in sa_ss; sa_ss.sin_family = AF_INET; sa_ss.sin_port = htons(ss_port); sa_ss.sin_addr.s_addr = inet_addr(storage_servers[i].ip);
                 if (connect(ss_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) { close(ss_sock); continue; }
-                // send original VIEW command
-                send(ss_sock, buf, strlen(buf), 0);
+                // send VIEW command with credentials
+                char auth_view_cmd[8192];
+                snprintf(auth_view_cmd, sizeof(auth_view_cmd), "USER:%s\nPASS:%s\nCMD:%s", username, password, buf);
+                send(ss_sock, auth_view_cmd, strlen(auth_view_cmd), 0);
                 // read response
                 char rbuf[4096]; ssize_t r;
                 strcat(aggregate, "\n--- StorageServer ");
@@ -400,7 +508,10 @@ int main() {
                 exit(0);
             }
             char read_cmd[512]; snprintf(read_cmd, sizeof(read_cmd), "READ %s", filename);
-            send(storage_sock, read_cmd, strlen(read_cmd), 0);
+            // Send READ command with credentials
+            char auth_read_cmd[8192];
+            snprintf(auth_read_cmd, sizeof(auth_read_cmd), "USER:%s\nPASS:%s\nCMD:%s", username, password, read_cmd);
+            send(storage_sock, auth_read_cmd, strlen(auth_read_cmd), 0);
             // read file content
             char *file_buf = NULL; size_t cap=0,len=0; char rtmp[4096]; ssize_t rr;
             while ((rr = recv(storage_sock, rtmp, sizeof(rtmp), 0)) > 0) {
@@ -423,7 +534,7 @@ int main() {
         }
 
         // Other file-based commands: choose storage server and forward
-        const char *cmds_with_file[] = {"READ", "INFO", "STREAM", "DELETE", "WRITE", "CREATE"};
+        const char *cmds_with_file[] = {"READ", "INFO", "STREAM", "DELETE", "WRITE", "CREATE", "ADDACCESS", "REMACCESS"};
         int is_file_cmd = 0; const char *file_part = NULL; char filename[256]; filename[0]='\0';
         for (size_t i=0;i<sizeof(cmds_with_file)/sizeof(cmds_with_file[0]);++i) {
             size_t clen = strlen(cmds_with_file[i]);
@@ -462,8 +573,10 @@ int main() {
         if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) { const char *msg = "Error: connect to storage failed\n"; send(client_sock,msg,strlen(msg),0); close(storage_sock); close(client_sock); exit(0);}        
 
         // Forward original command
-        // Forward original command
-send(storage_sock, buf, strlen(buf), 0);
+        // Forward original command with authentication
+        char auth_cmd[8192];
+        snprintf(auth_cmd, sizeof(auth_cmd), "USER:%s\nPASS:%s\nCMD:%s", username, password, buf);
+        send(storage_sock, auth_cmd, strlen(auth_cmd), 0);
 
 // For INFO command, prepend storage server ID to response
 if (strncmp(buf, "INFO", 4) == 0) {

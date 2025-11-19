@@ -12,6 +12,7 @@ int main() {
     struct sockaddr_in server_addr;
     char buffer[2048], command[100];
     int target_port;
+    char username[64], password[64];
     
     // Print welcome banner
     printf("\n");
@@ -29,6 +30,69 @@ int main() {
     printf("╚══════════════════════════════════════════════════════════════════════════╝\n");
     printf("\n");
     
+    // Authentication
+    printf("═══════════════════════ User Authentication ═══════════════════════\n");
+    
+    int authenticated = 0;
+    while (!authenticated) {
+        printf("Username: ");
+        fflush(stdout);
+        if (!fgets(username, sizeof(username), stdin)) {
+            printf("Failed to read username.\n");
+            return 1;
+        }
+        username[strcspn(username, "\n")] = 0; // Remove newline
+        
+        printf("Password: ");
+        fflush(stdout);
+        if (!fgets(password, sizeof(password), stdin)) {
+            printf("Failed to read password.\n");
+            return 1;
+        }
+        password[strcspn(password, "\n")] = 0; // Remove newline
+        
+        // Connect to name server to authenticate
+        sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) {
+            perror("Socket creation failed");
+            return 1;
+        }
+        
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(NAME_SERVER_PORT);
+        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        
+        if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+            perror("Connection to Name Server failed");
+            close(sock);
+            return 1;
+        }
+        
+        // Send authentication request
+        char auth_msg[512];
+        snprintf(auth_msg, sizeof(auth_msg), "TYPE:AUTH\nUSER:%s\nPASS:%s\n", username, password);
+        send(sock, auth_msg, strlen(auth_msg), 0);
+        
+        // Receive authentication response
+        memset(buffer, 0, sizeof(buffer));
+        ssize_t bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
+        if (bytes > 0) {
+            buffer[bytes] = '\0';
+            if (strstr(buffer, "AUTH:SUCCESS") != NULL) {
+                authenticated = 1;
+                printf("\n✓ Authentication successful! Welcome, %s!\n\n", username);
+            } else {
+                printf("\n✗ Authentication failed. Invalid username or password.\n");
+                printf("Please try again.\n\n");
+            }
+        } else {
+            printf("\n✗ Authentication failed. No response from server.\n");
+            printf("Please try again.\n\n");
+        }
+        
+        close(sock);
+    }
+    
     // Print quick help once
     printf("Available Commands:\n");
     printf("  ┌─────────────────────────────────────────────────────────────────┐\n");
@@ -36,6 +100,7 @@ int main() {
     printf("  │ READ <filename>     │  CREATE <filename>  │  DELETE <filename>  │\n");
     printf("  │ WRITE <filename> <sentence number>  │  INFO <filename>          │\n");
     printf("  │ STREAM <filename>   │  EXEC <filename>                          │\n");
+    printf("  │ ADDACCESS -R|-W <filename> <username>  │  REMACCESS <filename> <username> │\n");
     printf("  │ EXIT or QUIT - Leave the client                                 │\n");
     printf("  └─────────────────────────────────────────────────────────────────┘\n");
     printf("\n");
@@ -128,7 +193,12 @@ if (strncmp(command, "STREAM", 6) == 0) {
             continue;
         }
 
-        send(sock, command, strlen(command), 0);
+        // Prepend credentials to command
+        char authenticated_cmd[2048];
+        snprintf(authenticated_cmd, sizeof(authenticated_cmd), "USER:%s\nPASS:%s\nCMD:%s", 
+                 username, password, command);
+        
+        send(sock, authenticated_cmd, strlen(authenticated_cmd), 0);
 
         // If STREAM we read directly from storage server
         if (strncmp(command, "STREAM", 6) == 0) {

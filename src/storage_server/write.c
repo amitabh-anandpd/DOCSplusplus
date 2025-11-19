@@ -1,5 +1,6 @@
 #include "../../include/common.h"
 #include "../../include/write.h"
+#include "../../include/acl.h"
 
 #define MAX_SENTENCES 200
 #define MAX_SENT_LEN 4096
@@ -60,7 +61,15 @@ void remove_lock(const char *filename, int sentence_num) {
 }
 
 // --- Core WRITE logic ---
-void write_to_file(int client_sock, const char *filename, int sentence_num) {
+void write_to_file(int client_sock, const char *filename, int sentence_num, const char *username) {
+    // Check write access
+    if (!check_write_access(filename, username)) {
+        char msg[256];
+        sprintf(msg, "ERROR: Access denied. You do not have write permission for '%s'.\n", filename);
+        send(client_sock, msg, strlen(msg), 0);
+        return;
+    }
+    
     char path[512];
     sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
     printf("%s\n", path);
