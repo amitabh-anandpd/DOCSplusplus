@@ -73,6 +73,27 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
     char path[512];
     sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
     printf("%s\n", path);
+
+    char undo_path[512];
+    sprintf(undo_path, "%s/storage%d/undo/%s", STORAGE_DIR, get_storage_id(), filename);
+    
+    // Check if file exists and create backup
+    FILE *check_fp = fopen(path, "r");
+    if (check_fp) {
+        // File exists, create backup
+        FILE *undo_fp = fopen(undo_path, "w");
+        if (undo_fp) {
+            char backup_buf[4096];
+            size_t backup_bytes;
+            while ((backup_bytes = fread(backup_buf, 1, sizeof(backup_buf), check_fp)) > 0) {
+                fwrite(backup_buf, 1, backup_bytes, undo_fp);
+            }
+            fclose(undo_fp);
+        }
+        fclose(check_fp);
+    }
+
+
     FILE *fp = fopen(path, "r");
     if (!fp) {
         // Create empty file if it doesn't exist

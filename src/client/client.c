@@ -103,6 +103,7 @@ int main() {
     printf("  │ ADDACCESS -R|-W <filename> <username>  │  REMACCESS <filename> <username> │\n");
     printf("  │ EXIT or QUIT - Leave the client                                 │\n");
     printf("  │ LIST                                │\n");
+    printf("  │ UNDO <filename>                                │\n");
     printf("  └─────────────────────────────────────────────────────────────────┘\n");
     printf("\n");
 
