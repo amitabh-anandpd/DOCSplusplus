@@ -57,8 +57,8 @@ void file_info(int client_sock, const char *filename, const char *username) {
 
     // Convert timestamps
     char atime[64], mtime[64];
-    strftime(atime, sizeof(atime), "%Y-%m-%d %H:%M:%S", localtime(&st.st_atime));
-    strftime(mtime, sizeof(mtime), "%Y-%m-%d %H:%M:%S", localtime(&st.st_mtime));
+    strftime(atime, sizeof(atime), "%Y-%m-%d %H:%M:%S", localtime(&meta.last_accessed));
+    strftime(mtime, sizeof(mtime), "%Y-%m-%d %H:%M:%S", localtime(&meta.last_modified));
 
     sprintf(response,
         "------------------- FILE INFO -------------------\n"
