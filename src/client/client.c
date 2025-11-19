@@ -12,12 +12,33 @@ int main() {
     struct sockaddr_in server_addr;
     char buffer[2048], command[100];
     int target_port;
+    
+    // Print welcome banner
+    printf("\n");
+    printf("╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║                                                                          ║\n");
+    printf("║   ██████╗  ██████╗  ██████╗███████╗   ██╗      ██╗                       ║\n");
+    printf("║   ██╔══██╗██╔═══██╗██╔════╝██╔════╝   ██╚═╗    ██╚═╗                     ║\n");
+    printf("║   ██║  ██║██║   ██║██║     ███████╗████████ ████████                     ║\n");
+    printf("║   ██║  ██║██║   ██║██║     ╚════██║   ██║      ██║                       ║\n");
+    printf("║   ██████╔╝╚██████╔╝╚██████╗███████║   ██╝      ██╝                       ║\n");
+    printf("║   ╚═════╝  ╚═════╝  ╚═════╝╚══════╝╚══════╝╚══════╝                      ║\n");
+    printf("║                                                                          ║\n");
+    printf("║          Distributed Network File System with Advanced Features          ║\n");
+    printf("║                                                                          ║\n");
+    printf("╚══════════════════════════════════════════════════════════════════════════╝\n");
+    printf("\n");
+    
     // Print quick help once
-    printf("Commands:\n"
-        " VIEW | VIEW -a | VIEW -l | VIEW -al\n"
-        " READ <filename> | CREATE <filename> | DELETE <filename>\n"
-        " WRITE <filename> <sentence number> | INFO <filename> | STREAM <filename> | EXEC <filename>\n"
-        " Type EXIT or QUIT to leave the client.\n\n");
+    printf("Available Commands:\n");
+    printf("  ┌─────────────────────────────────────────────────────────────────┐\n");
+    printf("  │ VIEW | VIEW -a | VIEW -l | VIEW -al                             │\n");
+    printf("  │ READ <filename>     │  CREATE <filename>  │  DELETE <filename>  │\n");
+    printf("  │ WRITE <filename> <sentence number>  │  INFO <filename>          │\n");
+    printf("  │ STREAM <filename>   │  EXEC <filename>                          │\n");
+    printf("  │ EXIT or QUIT - Leave the client                                 │\n");
+    printf("  └─────────────────────────────────────────────────────────────────┘\n");
+    printf("\n");
 
     while (1) {
         printf("Client: ");
