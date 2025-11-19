@@ -8,7 +8,7 @@
 #include "../../include/acl.h"
 #include <signal.h>
 #include <sys/wait.h>
-
+#include "../../include/undo.h" 
 // Global storage server ID so helpers (e.g., write.c) can query it
 static int g_storage_id = 0;
 int get_storage_id(void) { return g_storage_id; }
@@ -404,6 +404,18 @@ int main() {
         //         execute_file(client_sock, filename, username);
         //     }
         // }
+        else if (strncmp(buffer, "UNDO ", 5) == 0) {
+            char filename[256];
+            sscanf(buffer + 5, "%s", filename);
+            
+            if (strlen(filename) == 0) {
+                char msg[] = "Error: Please specify a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+            }
+            else {
+                undo_last_change(client_sock, filename, username);
+            }
+        }
         else {
             char msg[] = "Invalid command.\n";
             send(client_sock, msg, strlen(msg), 0);
