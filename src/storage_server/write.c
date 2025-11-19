@@ -197,6 +197,12 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
             }
             fclose(fp);
 
+            // Update last_modified in meta file
+            FileMetadata meta;
+            if (read_metadata_file(filename, &meta) == 0) {
+                meta.last_modified = time(NULL);
+                update_metadata_file(filename, &meta);
+            }
             remove_lock(filename, sentence_num);
             char done[] = "Write Successful!\n";
             send(client_sock, done, strlen(done), 0);
