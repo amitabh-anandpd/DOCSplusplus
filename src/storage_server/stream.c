@@ -3,10 +3,19 @@
 #endif
 
 #include "../../include/common.h"
+#include "../../include/acl.h"
 #include <unistd.h>
 #include <time.h>  // for nanosleep()
 
-void stream_file(int client_sock, const char *filename) {
+void stream_file(int client_sock, const char *filename, const char *username) {
+    // Check read access
+    if (!check_read_access(filename, username)) {
+        char msg[256];
+        sprintf(msg, "ERROR: Access denied. You do not have permission to stream '%s'.\n", filename);
+        send(client_sock, msg, strlen(msg), 0);
+        return;
+    }
+    
     char path[512];
     sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
 

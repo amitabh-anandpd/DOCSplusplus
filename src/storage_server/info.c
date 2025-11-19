@@ -1,5 +1,6 @@
 #include "../../include/common.h"
 #include "../../include/info.h"
+#include "../../include/acl.h"
 
 // Helper: convert mode to rwx string (like ls -l)
 void get_permissions_string(mode_t mode, char *perm_str) {
@@ -15,7 +16,15 @@ void get_permissions_string(mode_t mode, char *perm_str) {
     perm_str[9] = '\0';
 }
 
-void file_info(int client_sock, const char *filename) {
+void file_info(int client_sock, const char *filename, const char *username) {
+    // Check read access
+    if (!check_read_access(filename, username)) {
+        char msg[256];
+        sprintf(msg, "ERROR: Access denied. You do not have permission to view info for '%s'.\n", filename);
+        send(client_sock, msg, strlen(msg), 0);
+        return;
+    }
+    
     char path[512];
     sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), filename);
     struct stat st;
@@ -28,36 +37,50 @@ void file_info(int client_sock, const char *filename) {
         return;
     }
 
-    char response[1024];
-    struct passwd *pwd = getpwuid(st.st_uid);
-    const char *owner = pwd ? pwd->pw_name : "unknown";
+    // Read metadata
+    FileMetadata meta;
+    char owner_str[128] = "unknown";
+    char created_str[64] = "N/A";
+    char read_users_str[512] = "N/A";
+    char write_users_str[512] = "N/A";
+    
+    if (read_metadata_file(filename, &meta) == 0) {
+        strncpy(owner_str, meta.owner, sizeof(owner_str) - 1);
+        strftime(created_str, sizeof(created_str), "%Y-%m-%d %H:%M:%S", localtime(&meta.created_time));
+        strncpy(read_users_str, meta.read_users, sizeof(read_users_str) - 1);
+        strncpy(write_users_str, meta.write_users, sizeof(write_users_str) - 1);
+    }
 
+    char response[2048];
     char perm_str[10];
     get_permissions_string(st.st_mode, perm_str);
 
     // Convert timestamps
-    char atime[64], mtime[64], ctime_str[64];
+    char atime[64], mtime[64];
     strftime(atime, sizeof(atime), "%Y-%m-%d %H:%M:%S", localtime(&st.st_atime));
     strftime(mtime, sizeof(mtime), "%Y-%m-%d %H:%M:%S", localtime(&st.st_mtime));
-    strftime(ctime_str, sizeof(ctime_str), "%Y-%m-%d %H:%M:%S", localtime(&st.st_ctime));
 
     sprintf(response,
         "------------------- FILE INFO -------------------\n"
-        "File Name   : %s\n"
-        "File Size   : %ld bytes\n"
-        "Owner       : %s\n"
-        "Permissions : %s\n"
-        "Created     : %s\n"
-        "Last Modified: %s\n"
-        "Last Access : %s\n"
+        "File Name      : %s\n"
+        "File Size      : %ld bytes\n"
+        "Owner          : %s\n"
+        "Permissions    : %s\n"
+        "Created        : %s\n"
+        "Last Modified  : %s\n"
+        "Last Access    : %s\n"
+        "Read Access    : %s\n"
+        "Write Access   : %s\n"
         "-------------------------------------------------\n",
         filename,
         st.st_size,
-        owner,
+        owner_str,
         perm_str,
-        ctime_str,
+        created_str,
         mtime,
-        atime
+        atime,
+        read_users_str,
+        write_users_str
     );
 
     send(client_sock, response, strlen(response), 0);
