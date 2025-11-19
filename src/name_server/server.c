@@ -1,6 +1,8 @@
 #include "../../include/common.h"
 #include "../../include/logger.h"
+
 #include "../../include/list.h"
+#include "../../include/file_index.h"
 
 #include <netinet/in.h>
 #include <errno.h>
@@ -23,17 +25,42 @@ typedef struct {
 static StorageServerInfo storage_servers[MAX_SS];
 static int num_storage_servers = 0;
 
-// Simple file -> storage server index
-#define MAX_FILE_ENTRIES 4096
-#define MAX_SS_PER_FILE 8
-typedef struct {
-    char name[256];
-    int ss_ids[MAX_SS_PER_FILE];
-    int ss_count;
-} FileEntry;
 
-static FileEntry file_index[MAX_FILE_ENTRIES];
-static int num_file_entries = 0;
+static FileIndex file_index;
+
+// Update file index from a storage server by sending VIEW and parsing the result
+void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
+    int ss_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (ss_sock < 0) return;
+    struct sockaddr_in sa;
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(client_port);
+    sa.sin_addr.s_addr = inet_addr(ip);
+    struct timeval tv; tv.tv_sec = 1; tv.tv_usec = 0;
+    setsockopt(ss_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+    setsockopt(ss_sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+    if (connect(ss_sock, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+        const char *view_cmd = "VIEW\n";
+        send(ss_sock, view_cmd, strlen(view_cmd), 0);
+        char view_buf[8192] = {0};
+        ssize_t n = recv(ss_sock, view_buf, sizeof(view_buf)-1, 0);
+        if (n > 0) {
+            view_buf[n] = '\0';
+            char *saveptr = NULL;
+            char *line = strtok_r(view_buf, "\n", &saveptr);
+            while (line) {
+                // skip header lines and empty lines
+                if (line[0] == '\0' || line[0] == '-' || line[0] == '|') {
+                    line = strtok_r(NULL, "\n", &saveptr);
+                    continue;
+                }
+                file_index_put(&file_index, line, ss_id);
+                line = strtok_r(NULL, "\n", &saveptr);
+            }
+        }
+    }
+    close(ss_sock);
+}
 
 // Add a storage server entry and return its id, or -1 on failure
 static int add_storage_server(const char *ip, int nm_port, int client_port_from_reg, const char *files) {
@@ -92,38 +119,8 @@ static int add_storage_server(const char *ip, int nm_port, int client_port_from_
         storage_servers[idx].files[0] = '\0';
     }
     num_storage_servers++;
-    // Populate file index from CSV list
-    if (files && files[0] != '\0') {
-        char buf[4096];
-        strncpy(buf, files, sizeof(buf)-1);
-        buf[sizeof(buf)-1] = '\0';
-        char *save = NULL;
-        char *tok = strtok_r(buf, ",", &save);
-        while (tok) {
-            while (*tok == ' ' || *tok == '\t') tok++;
-            char *end = tok + strlen(tok) - 1;
-            while (end > tok && (*end == ' ' || *end == '\t')) { *end = '\0'; end--; }
-            if (*tok) {
-                int found = 0;
-                for (int i = 0; i < num_file_entries; ++i) {
-                    if (strcmp(file_index[i].name, tok) == 0) {
-                        int already = 0;
-                        for (int j = 0; j < file_index[i].ss_count; ++j) if (file_index[i].ss_ids[j] == id) { already = 1; break; }
-                        if (!already && file_index[i].ss_count < MAX_SS_PER_FILE) file_index[i].ss_ids[file_index[i].ss_count++] = id;
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found && num_file_entries < MAX_FILE_ENTRIES) {
-                    strncpy(file_index[num_file_entries].name, tok, sizeof(file_index[num_file_entries].name)-1);
-                    file_index[num_file_entries].ss_count = 0;
-                    file_index[num_file_entries].ss_ids[file_index[num_file_entries].ss_count++] = id;
-                    num_file_entries++;
-                }
-            }
-            tok = strtok_r(NULL, ",", &save);
-        }
-    }
+    // After registration, update file index from this storage server
+    update_file_index_from_ss(storage_servers[idx].ip, storage_servers[idx].client_port, id);
     return id;
 }
 
@@ -132,9 +129,8 @@ StorageServerInfo *find_ss_by_id(int id) {
     return NULL;
 }
 
-FileEntry *find_fileentry(const char *name) {
-    for (int i = 0; i < num_file_entries; ++i) if (strcmp(file_index[i].name, name) == 0) return &file_index[i];
-    return NULL;
+FileMeta *find_filemeta(const char *name) {
+    return file_index_get(&file_index, name);
 }
 
 // Reap dead child processes
@@ -195,9 +191,13 @@ void proxy_bidirectional(int a_sock, int b_sock) {
 }
 
 int main() {
+
     int listen_fd, client_sock;
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
+
+    // Initialize file index
+    file_index_init(&file_index, 4096);
 
     // Handle SIGCHLD to avoid zombies
     struct sigaction sa;
@@ -449,11 +449,11 @@ int main() {
 
         // Helper lambdas (C99: use static inline functions via blocks of code)
         int choose_ss_for_file(const char *filename) {
-            FileEntry *fe = find_fileentry(filename);
-            if (fe && fe->ss_count > 0) {
+            FileMeta *meta = find_filemeta(filename);
+            if (meta && meta->ss_count > 0) {
                 // pick first active; could round-robin later
-                for (int i = 0; i < fe->ss_count; ++i) {
-                    StorageServerInfo *ssi = find_ss_by_id(fe->ss_ids[i]);
+                for (int i = 0; i < meta->ss_count; ++i) {
+                    StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[i]);
                     if (ssi && ssi->active) return ssi->id;
                 }
             }
@@ -563,8 +563,8 @@ int main() {
             // extract filename (may have extra arguments for WRITE)
             if (sscanf(file_part, " %255s", filename) == 1) {
                 // For CREATE if file doesn't exist yet choose a server via simple round-robin
-                FileEntry *fe = find_fileentry(filename);
-                if (fe) {
+                FileMeta *meta = find_filemeta(filename);
+                if (meta) {
                     ss_id_target = choose_ss_for_file(filename);
                 } else if (strncmp(buf, "CREATE", 6)==0) {
                     // round-robin
@@ -628,26 +628,11 @@ if (strncmp(buf, "INFO", 4) == 0) {
 
         // Update file index on CREATE success (naive: if response contains "Success:")
         if (strncmp(buf, "CREATE", 6)==0 && filename[0]) {
-            // Check if already present
-            if (!find_fileentry(filename)) {
-                if (num_file_entries < MAX_FILE_ENTRIES) {
-                    strncpy(file_index[num_file_entries].name, filename, sizeof(file_index[num_file_entries].name)-1);
-                    file_index[num_file_entries].ss_count = 0;
-                    file_index[num_file_entries].ss_ids[file_index[num_file_entries].ss_count++] = ss_id_target;
-                    num_file_entries++;
-                }
-            }
+            file_index_put(&file_index, filename, ss_id_target);
         }
         // Update on DELETE (remove server mapping; if empty remove entry)
         if (strncmp(buf, "DELETE", 6)==0 && filename[0]) {
-            FileEntry *fe = find_fileentry(filename);
-            if (fe) {
-                int newc = 0; for (int i=0;i<fe->ss_count;++i) if (fe->ss_ids[i] != ss_id_target) fe->ss_ids[newc++] = fe->ss_ids[i]; fe->ss_count = newc; if (newc==0) {
-                    // remove entry by shifting
-                    int idx=-1; for (int i=0;i<num_file_entries;++i) if (&file_index[i]==fe) { idx=i; break; }
-                    if (idx>=0) { for (int j=idx;j<num_file_entries-1;++j) file_index[j]=file_index[j+1]; num_file_entries--; }
-                }
-            }
+            file_index_remove(&file_index, filename, ss_id_target);
         }
 
         close(storage_sock);
