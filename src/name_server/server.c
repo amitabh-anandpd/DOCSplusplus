@@ -39,7 +39,6 @@ void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
     struct timeval tv; tv.tv_sec = 1; tv.tv_usec = 0;
     setsockopt(ss_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     setsockopt(ss_sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
-    log_event(LOG_INFO, "Entering update_file_index_from_ss for SS %d at %s:%d", ss_id, ip, client_port);
     int conn_res = connect(ss_sock, (struct sockaddr*)&sa, sizeof(sa));
     if (conn_res != 0) {
         log_event(LOG_ERROR, "[DEBUG] connect() to SS %d at %s:%d failed: %s", ss_id, ip, client_port, strerror(errno));
@@ -76,7 +75,6 @@ void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
                     ssize_t info_n = recv(info_sock, info_buf, sizeof(info_buf)-1, 0);
                     if (info_n > 0) {
                         info_buf[info_n] = '\0';
-                        log_event(LOG_INFO, "[DEBUG] INFO response for '%s': %s on port: %d", info_cmd, info_buf, info_sock);
                         // Parse INFO response and fill FileMeta
                         FileMeta meta = {0};
                         strncpy(meta.name, line, sizeof(meta.name)-1);
@@ -439,6 +437,163 @@ int main() {
             continue;
         }
 
+        // Check if this is a CREATE or DELETE command - handle in parent without forking
+        if (peek_n > 0) {
+            // Parse to check for CREATE/DELETE commands
+            char peek_copy[8192];
+            strncpy(peek_copy, peek, sizeof(peek_copy)-1);
+            peek_copy[peek_n] = '\0';
+            
+            // Extract username and command
+            char peek_username[64] = "";
+            char peek_password[64] = "";
+            char peek_command[1024] = "";
+            char *saveptr_peek = NULL;
+            char *peek_line = strtok_r(peek_copy, "\n", &saveptr_peek);
+            while (peek_line) {
+                if (strncmp(peek_line, "USER:", 5) == 0) {
+                    strncpy(peek_username, peek_line + 5, sizeof(peek_username) - 1);
+                } else if (strncmp(peek_line, "PASS:", 5) == 0) {
+                    strncpy(peek_password, peek_line + 5, sizeof(peek_password) - 1);
+                } else if (strncmp(peek_line, "CMD:", 4) == 0) {
+                    strncpy(peek_command, peek_line + 4, sizeof(peek_command) - 1);
+                    break;
+                }
+                peek_line = strtok_r(NULL, "\n", &saveptr_peek);
+            }
+            
+            // Check if it's CREATE or DELETE - handle synchronously in parent
+            if (strncmp(peek_command, "CREATE ", 7) == 0) {
+                char filename[256] = "";
+                sscanf(peek_command + 7, "%255s", filename);
+                if (filename[0] != '\0') {
+                    // Consume the request
+                    char reqbuf[8192];
+                    recv(client_sock, reqbuf, sizeof(reqbuf)-1, 0);
+                    
+                    // Forward to storage server
+                    int ss_id_target = -1;
+                    FileMeta *existing_meta = find_filemeta(filename);
+                    if (existing_meta && existing_meta->ss_count > 0) {
+                        ss_id_target = existing_meta->ss_ids[0];
+                    } else {
+                        // Round-robin for new file
+                        static int rr = 0;
+                        for (int attempts=0; attempts< num_storage_servers; ++attempts) {
+                            int idx = (rr + attempts) % num_storage_servers;
+                            if (storage_servers[idx].active) { ss_id_target = storage_servers[idx].id; rr = (idx+1)%num_storage_servers; break; }
+                        }
+                    }
+                    
+                    if (ss_id_target >= 0) {
+                        StorageServerInfo *ssi = find_ss_by_id(ss_id_target);
+                        if (ssi) {
+                            int storage_sock = socket(AF_INET, SOCK_STREAM, 0);
+                            if (storage_sock >= 0) {
+                                struct sockaddr_in sa_ss; sa_ss.sin_family = AF_INET; sa_ss.sin_port = htons(ssi->client_port); sa_ss.sin_addr.s_addr = inet_addr(ssi->ip);
+                                if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) == 0) {
+                                    // Forward CREATE command
+                                    char auth_cmd[8192];
+                                    snprintf(auth_cmd, sizeof(auth_cmd), "USER:%s\nPASS:%s\nCMD:%s", peek_username, peek_password, peek_command);
+                                    send(storage_sock, auth_cmd, strlen(auth_cmd), 0);
+                                    
+                                    // Read response
+                                    char response[4096];
+                                    ssize_t resp_n = recv(storage_sock, response, sizeof(response)-1, 0);
+                                    if (resp_n > 0) {
+                                        response[resp_n] = '\0';
+                                        send(client_sock, response, resp_n, 0);
+                                        
+                                        // Check if successful, then update hashmap
+                                        if (strstr(response, "Success") != NULL || strstr(response, "success") != NULL) {
+                                            FileMeta *newmeta = malloc(sizeof(FileMeta));
+                                            memset(newmeta, 0, sizeof(FileMeta));
+                                            strncpy(newmeta->name, filename, sizeof(newmeta->name)-1);
+                                            strncpy(newmeta->owner, peek_username, sizeof(newmeta->owner)-1);
+                                            time_t now = time(NULL);
+                                            newmeta->created_time = now;
+                                            newmeta->last_modified = now;
+                                            newmeta->last_accessed = now;
+                                            newmeta->ss_ids[0] = ss_id_target;
+                                            newmeta->ss_count = 1;
+                                            snprintf(newmeta->read_users, sizeof(newmeta->read_users), "%s", peek_username);
+                                            snprintf(newmeta->write_users, sizeof(newmeta->write_users), "%s", peek_username);
+                                            unsigned long h = hash_filename(filename) % file_index.num_buckets;
+                                            newmeta->next = file_index.buckets[h];
+                                            file_index.buckets[h] = newmeta;
+                                            log_event(LOG_INFO, "[PARENT] File '%s' created by '%s' and metadata added to index", filename, peek_username);
+                                        }
+                                    }
+                                    close(storage_sock);
+                                }
+                            }
+                        }
+                    }
+                    close(client_sock);
+                    continue;
+                }
+            } else if (strncmp(peek_command, "DELETE ", 7) == 0) {
+                char filename[256] = "";
+                sscanf(peek_command + 7, "%255s", filename);
+                if (filename[0] != '\0') {
+                    // Consume the request
+                    char reqbuf[8192];
+                    recv(client_sock, reqbuf, sizeof(reqbuf)-1, 0);
+                    
+                    // Forward to storage server
+                    FileMeta *meta = find_filemeta(filename);
+                    if (meta && meta->ss_count > 0) {
+                        StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[0]);
+                        if (ssi) {
+                            int storage_sock = socket(AF_INET, SOCK_STREAM, 0);
+                            if (storage_sock >= 0) {
+                                struct sockaddr_in sa_ss; sa_ss.sin_family = AF_INET; sa_ss.sin_port = htons(ssi->client_port); sa_ss.sin_addr.s_addr = inet_addr(ssi->ip);
+                                if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) == 0) {
+                                    // Forward DELETE command
+                                    char auth_cmd[8192];
+                                    snprintf(auth_cmd, sizeof(auth_cmd), "USER:%s\nPASS:%s\nCMD:%s", peek_username, peek_password, peek_command);
+                                    send(storage_sock, auth_cmd, strlen(auth_cmd), 0);
+                                    
+                                    // Read response
+                                    char response[4096];
+                                    ssize_t resp_n = recv(storage_sock, response, sizeof(response)-1, 0);
+                                    if (resp_n > 0) {
+                                        response[resp_n] = '\0';
+                                        send(client_sock, response, resp_n, 0);
+                                        
+                                        // Check if successful, then remove from hashmap
+                                        if (strstr(response, "Success") != NULL || strstr(response, "success") != NULL || strstr(response, "deleted") != NULL) {
+                                            unsigned long h = hash_filename(filename) % file_index.num_buckets;
+                                            FileMeta **bucket = &file_index.buckets[h];
+                                            FileMeta *prev = NULL;
+                                            FileMeta *curr = *bucket;
+                                            while (curr) {
+                                                if (strcmp(curr->name, filename) == 0) {
+                                                    if (prev) {
+                                                        prev->next = curr->next;
+                                                    } else {
+                                                        *bucket = curr->next;
+                                                    }
+                                                    free(curr);
+                                                    log_event(LOG_INFO, "[PARENT] File '%s' deleted and removed from index", filename);
+                                                    break;
+                                                }
+                                                prev = curr;
+                                                curr = curr->next;
+                                            }
+                                        }
+                                    }
+                                    close(storage_sock);
+                                }
+                            }
+                        }
+                    }
+                    close(client_sock);
+                    continue;
+                }
+            }
+        }
+
         // Not a registration: fork to handle the connection as before
         pid_t pid = fork();
         if (pid < 0) {
@@ -748,14 +903,6 @@ int main() {
             }
         }
 
-        // Update file index on CREATE success (naive: if response contains "Success:")
-        if (strncmp(buf, "CREATE", 6)==0 && filename[0]) {
-            file_index_put(&file_index, filename, ss_id_target);
-        }
-        // Update on DELETE (remove server mapping; if empty remove entry)
-        if (strncmp(buf, "DELETE", 6)==0 && filename[0]) {
-            file_index_remove(&file_index, filename, ss_id_target);
-        }
 
         close(storage_sock);
         close(client_sock);
