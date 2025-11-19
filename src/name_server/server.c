@@ -1,5 +1,6 @@
 #include "../../include/common.h"
 #include "../../include/logger.h"
+#include "../../include/list.h"
 
 #include <netinet/in.h>
 #include <errno.h>
@@ -439,6 +440,12 @@ int main() {
         strncpy(buf, command, sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';
         n = strlen(buf);
+
+        if (strcmp(buf, "LIST") == 0) {
+            list_users(client_sock, username, client_ip, client_port);
+            close(client_sock);
+            exit(0);
+        }
 
         // Helper lambdas (C99: use static inline functions via blocks of code)
         int choose_ss_for_file(const char *filename) {

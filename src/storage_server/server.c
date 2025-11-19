@@ -8,7 +8,7 @@
 #include "../../include/acl.h"
 #include <signal.h>
 #include <sys/wait.h>
-#include "../../include/list.h" 
+
 // Global storage server ID so helpers (e.g., write.c) can query it
 static int g_storage_id = 0;
 int get_storage_id(void) { return g_storage_id; }
@@ -468,10 +468,6 @@ int main() {
                 char msg[] = "Usage: REMACCESS <filename> <username>\n";
                 send(client_sock, msg, strlen(msg), 0);
             }
-        }
-        else if (strcmp(buffer, "LIST") == 0) {
-            // No auth-based filtering (any authenticated user can see list of users)
-            list_users(client_sock);
         }
 
         else {
