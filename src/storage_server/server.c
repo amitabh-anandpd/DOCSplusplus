@@ -393,17 +393,17 @@ int main() {
                 stream_file(client_sock, filename, username);
             }
         }
-        else if (strncmp(buffer, "EXEC ", 5) == 0) {
-            char filename[256];
-            sscanf(buffer + 5, "%s", filename); // extract filename
+        // else if (strncmp(buffer, "EXEC ", 5) == 0) {
+        //     char filename[256];
+        //     sscanf(buffer + 5, "%s", filename); // extract filename
 
-            if (strlen(filename) == 0) {
-                char msg[] = "Error: Please specify a filename\n";
-                send(client_sock, msg, strlen(msg), 0);
-            } else {
-                execute_file(client_sock, filename, username);
-            }
-        }
+        //     if (strlen(filename) == 0) {
+        //         char msg[] = "Error: Please specify a filename\n";
+        //         send(client_sock, msg, strlen(msg), 0);
+        //     } else {
+        //         execute_file(client_sock, filename, username);
+        //     }
+        // }
         else {
             char msg[] = "Invalid command.\n";
             send(client_sock, msg, strlen(msg), 0);

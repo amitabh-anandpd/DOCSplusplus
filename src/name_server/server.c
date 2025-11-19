@@ -792,6 +792,139 @@ int main() {
         buf[sizeof(buf) - 1] = '\0';
         n = strlen(buf);
 
+
+
+        // ===== ADD THE EXEC HANDLING CODE HERE =====
+        if (strncmp(buf, "EXEC ", 5) == 0) {
+            char filename[256];
+            if (sscanf(buf + 5, "%255s", filename) != 1) {
+                const char *msg = "Error: EXEC requires a filename\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            
+            // Find storage server for the file
+            int ss_id = -1;
+            FileMeta *meta = find_filemeta(filename);
+            if (meta && meta->ss_count > 0) {
+                for (int i = 0; i < meta->ss_count; ++i) {
+                    StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[i]);
+                    if (ssi && ssi->active) { 
+                        ss_id = ssi->id; 
+                        break; 
+                    }
+                }
+            }
+            
+            if (ss_id < 0) {
+                // Fallback to first active server
+                for (int i = 0; i < num_storage_servers; ++i) {
+                    if (storage_servers[i].active) { 
+                        ss_id = storage_servers[i].id; 
+                        break; 
+                    }
+                }
+            }
+            
+            if (ss_id < 0) {
+                const char *msg = "Error: No storage server available\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            
+            StorageServerInfo *ssi = find_ss_by_id(ss_id);
+            int storage_sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (storage_sock < 0) {
+                const char *msg = "Error: socket failure\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            
+            struct sockaddr_in sa_ss; 
+            sa_ss.sin_family = AF_INET; 
+            sa_ss.sin_port = htons(ssi->client_port); 
+            sa_ss.sin_addr.s_addr = inet_addr(ssi->ip);
+            
+            if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) {
+                const char *msg = "Error: connect to storage failed\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(storage_sock);
+                close(client_sock);
+                exit(0);
+            }
+            
+            // Send READ command to fetch file content
+            char read_cmd[512]; 
+            snprintf(read_cmd, sizeof(read_cmd), "READ %s", filename);
+            char auth_read_cmd[8192];
+            snprintf(auth_read_cmd, sizeof(auth_read_cmd), "USER:%s\nPASS:%s\nCMD:%s", username, password, read_cmd);
+            send(storage_sock, auth_read_cmd, strlen(auth_read_cmd), 0);
+            
+            // Read file content from storage server
+            char *file_buf = NULL; 
+            size_t cap = 0, len = 0; 
+            char rtmp[4096]; 
+            ssize_t rr;
+            
+            while ((rr = recv(storage_sock, rtmp, sizeof(rtmp), 0)) > 0) {
+                size_t rr_size = (size_t)rr;
+                if (len + rr_size + 1 > cap) { 
+                    size_t newcap = (cap == 0) ? (rr_size + 1) : (cap * 2 + rr_size + 1); 
+                    char *nb = realloc(file_buf, newcap); 
+                    if (!nb) break; 
+                    file_buf = nb; 
+                    cap = newcap; 
+                }
+                memcpy(file_buf + len, rtmp, rr); 
+                len += rr;
+            }
+            
+            if (file_buf) file_buf[len] = '\0';
+            close(storage_sock);
+            
+            if (!file_buf || len == 0) {
+                const char *fmt = "Error: Could not read file '%s' or empty\n"; 
+                char msg[512]; 
+                snprintf(msg, sizeof(msg), fmt, filename); 
+                send(client_sock, msg, strlen(msg), 0); 
+                free(file_buf); 
+                close(client_sock); 
+                exit(0);
+            }
+            
+            // Execute each line and send output to client
+            char *saveptr2 = NULL; 
+            char *line = strtok_r(file_buf, "\n", &saveptr2);
+            while (line) { 
+                // Trim leading whitespace
+                while (*line == ' ' || *line == '\t') line++; 
+                
+                // Skip empty lines and markdown fences
+                if (*line && strncmp(line, "```", 3) != 0) { 
+                    FILE *fp = popen(line, "r"); 
+                    if (!fp) { 
+                        char emsg[512]; 
+                        snprintf(emsg, sizeof(emsg), "ERROR: Failed to execute: %s\n", line); 
+                        send(client_sock, emsg, strlen(emsg), 0);
+                    } else { 
+                        char ob[1024]; 
+                        while (fgets(ob, sizeof(ob), fp)) 
+                            send(client_sock, ob, strlen(ob), 0); 
+                        pclose(fp);
+                    }
+                }
+                line = strtok_r(NULL, "\n", &saveptr2);
+            }
+            
+            free(file_buf);
+            close(client_sock);
+            exit(0);
+        }
+
+
         if (strcmp(buf, "LIST") == 0) {
             list_users(client_sock, username, client_ip, client_port);
             close(client_sock);
@@ -831,75 +964,6 @@ int main() {
             exit(0);
         }
 
-        // EXEC is special (fetch file then execute locally)
-        if (strncmp(buf, "EXEC ", 6) == 0) {
-            char filename[256];
-            if (sscanf(buf + 5, "%255s", filename) != 1) {
-                const char *msg = "Error: EXEC requires a filename\n";
-                send(client_sock, msg, strlen(msg), 0);
-                close(client_sock);
-                exit(0);
-            }
-            int ss_id = -1;
-            FileMeta *meta = find_filemeta(filename);
-            if (meta && meta->ss_count > 0) {
-                for (int i = 0; i < meta->ss_count; ++i) {
-                    StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[i]);
-                    if (ssi && ssi->active) { ss_id = ssi->id; break; }
-                }
-            }
-            if (ss_id < 0) {
-                for (int i = 0; i < num_storage_servers; ++i) {
-                    if (storage_servers[i].active) { ss_id = storage_servers[i].id; break; }
-                }
-            }
-            if (ss_id < 0) {
-                const char *msg = "Error: No storage server available\n";
-                send(client_sock, msg, strlen(msg), 0);
-                close(client_sock);
-                exit(0);
-            }
-            StorageServerInfo *ssi = find_ss_by_id(ss_id);
-            int storage_sock = socket(AF_INET, SOCK_STREAM, 0);
-            if (storage_sock < 0) {
-                const char *msg = "Error: socket failure\n";
-                send(client_sock, msg, strlen(msg), 0);
-                close(client_sock);
-                exit(0);
-            }
-            struct sockaddr_in sa_ss; sa_ss.sin_family = AF_INET; sa_ss.sin_port = htons(ssi->client_port); sa_ss.sin_addr.s_addr = inet_addr(ssi->ip);
-            if (connect(storage_sock, (struct sockaddr*)&sa_ss, sizeof(sa_ss)) < 0) {
-                const char *msg = "Error: connect to storage failed\n";
-                send(client_sock, msg, strlen(msg), 0);
-                close(storage_sock);
-                close(client_sock);
-                exit(0);
-            }
-            char read_cmd[512]; snprintf(read_cmd, sizeof(read_cmd), "READ %s", filename);
-            // Send READ command with credentials
-            char auth_read_cmd[8192];
-            snprintf(auth_read_cmd, sizeof(auth_read_cmd), "USER:%s\nPASS:%s\nCMD:%s", username, password, read_cmd);
-            send(storage_sock, auth_read_cmd, strlen(auth_read_cmd), 0);
-            // read file content
-            char *file_buf = NULL; size_t cap=0,len=0; char rtmp[4096]; ssize_t rr;
-            while ((rr = recv(storage_sock, rtmp, sizeof(rtmp), 0)) > 0) {
-                size_t rr_size = (size_t) rr;
-                if (len + rr_size + 1 > cap) { size_t newcap = (cap==0)?(rr_size+1):(cap*2 + rr_size + 1); char *nb = realloc(file_buf, newcap); if (!nb) break; file_buf = nb; cap = newcap; }
-                memcpy(file_buf + len, rtmp, rr); len += rr;
-            }
-            if (file_buf) file_buf[len] = '\0';
-            close(storage_sock);
-            if (!file_buf || len==0) {
-                const char *fmt = "Error: Could not read file '%s' or empty\n"; char msg[512]; snprintf(msg, sizeof(msg), fmt, filename); send(client_sock, msg, strlen(msg), 0); free(file_buf); close(client_sock); exit(0);
-            }
-            char *saveptr2 = NULL; char *line = strtok_r(file_buf, "\n", &saveptr2);
-            while (line) { while (*line==' '||*line=='\t') line++; if (*line && strncmp(line,"```",3)!=0) { FILE *fp = popen(line, "r"); if (!fp) { char emsg[512]; snprintf(emsg,sizeof(emsg),"ERROR: Failed to execute: %s\n", line); send(client_sock, emsg, strlen(emsg),0);} else { char ob[1024]; while (fgets(ob,sizeof(ob),fp)) send(client_sock, ob, strlen(ob),0); pclose(fp);} }
-                line = strtok_r(NULL, "\n", &saveptr2);
-            }
-            free(file_buf);
-            close(client_sock);
-            exit(0);
-        }
 
         // Other file-based commands: choose storage server and forward
         const char *cmds_with_file[] = {"READ", "STREAM", "DELETE", "WRITE", "CREATE"};
@@ -1028,97 +1092,6 @@ int main() {
         // 1) ask storage server for the file content (send READ <filename>)
         // 2) execute each non-empty line locally via popen()
         // 3) stream outputs back to the client
-        if (n > 5 && strncmp(buf, "EXEC ", 5) == 0) {
-            // extract filename
-            char filename[256];
-            if (sscanf(buf + 5, "%255s", filename) != 1) {
-                char msg[] = "Error: EXEC requires a filename\n";
-                send(client_sock, msg, strlen(msg), 0);
-                close(storage_sock);
-                close(client_sock);
-                exit(0);
-            }
-
-            // ask storage server for file content
-            char read_cmd[512];
-            snprintf(read_cmd, sizeof(read_cmd), "READ %s", filename);
-            ssize_t sent = 0;
-            ssize_t tosend = strlen(read_cmd);
-            while (sent < tosend) {
-                ssize_t s = send(storage_sock, read_cmd + sent, tosend - sent, 0);
-                if (s <= 0) break;
-                sent += s;
-            }
-
-            // read full file content from storage server
-            char *file_buf = NULL;
-            size_t file_cap = 0, file_len = 0;
-            char tmp[4096];
-            ssize_t r;
-            while ((r = recv(storage_sock, tmp, sizeof(tmp), 0)) > 0) {
-                if (file_len + r + 1 > file_cap) {
-                    size_t rr = (size_t)r;
-                    size_t newcap = (file_cap == 0) ? (rr + 1) : (file_cap * 2 + rr + 1);
-                    char *nb = realloc(file_buf, newcap);
-                    if (!nb) break; // allocation failure
-                    file_buf = nb;
-                    file_cap = newcap;
-                }
-                memcpy(file_buf + file_len, tmp, r);
-                file_len += r;
-            }
-            if (file_buf) file_buf[file_len] = '\0';
-
-            // close storage connection early
-            close(storage_sock);
-
-            if (!file_buf || file_len == 0) {
-                const char *fmt = "Error: Could not read file '%s' or file is empty\n";
-                size_t mlen = snprintf(NULL, 0, fmt, filename) + 1;
-                char *msg = malloc(mlen);
-                if (msg) {
-                    snprintf(msg, mlen, fmt, filename);
-                    send(client_sock, msg, strlen(msg), 0);
-                    free(msg);
-                } else {
-                    const char *fallback = "Error: Could not read file or file is empty\n";
-                    send(client_sock, fallback, strlen(fallback), 0);
-                }
-                free(file_buf);
-                close(client_sock);
-                exit(0);
-            }
-
-            // Execute each line locally and stream output to client
-            // We'll tokenize by newline
-            char *saveptr = NULL;
-            char *line = strtok_r(file_buf, "\n", &saveptr);
-            while (line) {
-                // trim leading whitespace
-                while (*line == ' ' || *line == '\t') line++;
-                // skip empty lines and fences
-                if (line[0] != '\0' && strncmp(line, "```", 3) != 0) {
-                    // run command
-                    FILE *cmd_fp = popen(line, "r");
-                    if (!cmd_fp) {
-                        char err[512];
-                        snprintf(err, sizeof(err), "ERROR: Failed to execute command: %s\n", line);
-                        send(client_sock, err, strlen(err), 0);
-                    } else {
-                        char outbuf[1024];
-                        while (fgets(outbuf, sizeof(outbuf), cmd_fp)) {
-                            send(client_sock, outbuf, strlen(outbuf), 0);
-                        }
-                        pclose(cmd_fp);
-                    }
-                }
-                line = strtok_r(NULL, "\n", &saveptr);
-            }
-
-            free(file_buf);
-            close(client_sock);
-            exit(0);
-        }
 
         // Not an EXEC command: forward initial bytes to storage server (if any)
         if (n > 0) {
