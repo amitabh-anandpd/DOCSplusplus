@@ -591,6 +591,122 @@ int main() {
                     close(client_sock);
                     continue;
                 }
+            } else if (strncmp(peek_command, "ADDACCESS ", 10) == 0) {
+                // Parse: ADDACCESS -R|-W <filename> <target_username>
+                char flag[8], filename[256], target_user[64];
+                if (sscanf(peek_command + 10, "%s %s %s", flag, filename, target_user) == 3) {
+                    // Consume the request
+                    char reqbuf[8192];
+                    recv(client_sock, reqbuf, sizeof(reqbuf)-1, 0);
+                    
+                    // Check if requester is the owner
+                    FileMeta *meta = find_filemeta(filename);
+                    char response[512];
+                    if (!meta) {
+                        snprintf(response, sizeof(response), "Error: File '%s' not found\n", filename);
+                        send(client_sock, response, strlen(response), 0);
+                    } else if (strcmp(meta->owner, peek_username) != 0) {
+                        snprintf(response, sizeof(response), "Error: Only the owner can grant access to '%s'\n", filename);
+                        send(client_sock, response, strlen(response), 0);
+                    } else {
+                        // Update metadata in hashmap
+                        if (strcmp(flag, "-R") == 0) {
+                            // Add to read_users if not already present
+                            if (strstr(meta->read_users, target_user) == NULL) {
+                                if (strlen(meta->read_users) > 0) strcat(meta->read_users, ",");
+                                strncat(meta->read_users, target_user, sizeof(meta->read_users) - strlen(meta->read_users) - 1);
+                                snprintf(response, sizeof(response), "Success: Read access granted to '%s' for file '%s'\n", target_user, filename);
+                                log_event(LOG_INFO, "[PARENT] Read access granted to '%s' for file '%s'", target_user, filename);
+                            } else {
+                                snprintf(response, sizeof(response), "Info: User '%s' already has read access to '%s'\n", target_user, filename);
+                            }
+                        } else if (strcmp(flag, "-W") == 0) {
+                            // Add to write_users if not already present
+                            if (strstr(meta->write_users, target_user) == NULL) {
+                                if (strlen(meta->write_users) > 0) strcat(meta->write_users, ",");
+                                strncat(meta->write_users, target_user, sizeof(meta->write_users) - strlen(meta->write_users) - 1);
+                                snprintf(response, sizeof(response), "Success: Write access granted to '%s' for file '%s'\n", target_user, filename);
+                                log_event(LOG_INFO, "[PARENT] Write access granted to '%s' for file '%s'", target_user, filename);
+                            } else {
+                                snprintf(response, sizeof(response), "Info: User '%s' already has write access to '%s'\n", target_user, filename);
+                            }
+                        } else {
+                            snprintf(response, sizeof(response), "Error: Invalid flag '%s'. Use -R for read or -W for write\n", flag);
+                        }
+                        send(client_sock, response, strlen(response), 0);
+                    }
+                    close(client_sock);
+                    continue;
+                } else {
+                    // Invalid format, let it fall through to child process which will send error
+                }
+            } else if (strncmp(peek_command, "REMACCESS ", 10) == 0) {
+                // Parse: REMACCESS <filename> <target_username>
+                char filename[256], target_user[64];
+                if (sscanf(peek_command + 10, "%s %s", filename, target_user) == 2) {
+                    // Consume the request
+                    char reqbuf[8192];
+                    recv(client_sock, reqbuf, sizeof(reqbuf)-1, 0);
+                    
+                    // Check if requester is the owner
+                    FileMeta *meta = find_filemeta(filename);
+                    char response[512];
+                    if (!meta) {
+                        snprintf(response, sizeof(response), "Error: File '%s' not found\n", filename);
+                        send(client_sock, response, strlen(response), 0);
+                    } else if (strcmp(meta->owner, peek_username) != 0) {
+                        snprintf(response, sizeof(response), "Error: Only the owner can revoke access to '%s'\n", filename);
+                        send(client_sock, response, strlen(response), 0);
+                    } else if (strcmp(target_user, peek_username) == 0) {
+                        snprintf(response, sizeof(response), "Error: Cannot revoke owner's access\n");
+                        send(client_sock, response, strlen(response), 0);
+                    } else {
+                        // Remove from both read_users and write_users
+                        char new_read[512] = "", new_write[512] = "";
+                        
+                        // Remove from read_users
+                        char *read_copy = strdup(meta->read_users);
+                        if (read_copy) {
+                            char *saveptr_read = NULL;
+                            char *user = strtok_r(read_copy, ",", &saveptr_read);
+                            while (user) {
+                                if (strcmp(user, target_user) != 0) {
+                                    if (strlen(new_read) > 0) strcat(new_read, ",");
+                                    strcat(new_read, user);
+                                }
+                                user = strtok_r(NULL, ",", &saveptr_read);
+                            }
+                            free(read_copy);
+                        }
+                        
+                        // Remove from write_users
+                        char *write_copy = strdup(meta->write_users);
+                        if (write_copy) {
+                            char *saveptr_write = NULL;
+                            char *user = strtok_r(write_copy, ",", &saveptr_write);
+                            while (user) {
+                                if (strcmp(user, target_user) != 0) {
+                                    if (strlen(new_write) > 0) strcat(new_write, ",");
+                                    strcat(new_write, user);
+                                }
+                                user = strtok_r(NULL, ",", &saveptr_write);
+                            }
+                            free(write_copy);
+                        }
+                        
+                        // Update metadata
+                        strncpy(meta->read_users, new_read, sizeof(meta->read_users) - 1);
+                        strncpy(meta->write_users, new_write, sizeof(meta->write_users) - 1);
+                        
+                        snprintf(response, sizeof(response), "Success: All access revoked for '%s' on file '%s'\n", target_user, filename);
+                        log_event(LOG_INFO, "[PARENT] All access revoked for '%s' on file '%s'", target_user, filename);
+                        send(client_sock, response, strlen(response), 0);
+                    }
+                    close(client_sock);
+                    continue;
+                } else {
+                    // Invalid format, let it fall through to child process which will send error
+                }
             }
         }
 
@@ -786,7 +902,7 @@ int main() {
         }
 
         // Other file-based commands: choose storage server and forward
-        const char *cmds_with_file[] = {"READ", "INFO", "STREAM", "DELETE", "WRITE", "CREATE", "ADDACCESS", "REMACCESS"};
+        const char *cmds_with_file[] = {"READ", "STREAM", "DELETE", "WRITE", "CREATE"};
         int is_file_cmd = 0; const char *file_part = NULL; char filename[256]; filename[0]='\0';
         for (size_t i=0;i<sizeof(cmds_with_file)/sizeof(cmds_with_file[0]);++i) {
             size_t clen = strlen(cmds_with_file[i]);
