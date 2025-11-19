@@ -18,6 +18,7 @@ int create_metadata_file(const char *filename, const char *owner) {
     time_t now = time(NULL);
     fprintf(fp, "OWNER:%s\n", owner);
     fprintf(fp, "CREATED:%ld\n", (long)now);
+    fprintf(fp, "LAST_MODIFIED:%ld\n", (long)now);
     fprintf(fp, "LAST_ACCESS:%ld\n", (long)now);
     fprintf(fp, "READ_USERS:%s\n", owner);  // Owner has read access by default
     fprintf(fp, "WRITE_USERS:%s\n", owner); // Owner has write access by default
@@ -71,6 +72,7 @@ int update_metadata_file(const char *filename, FileMetadata *meta) {
     
     fprintf(fp, "OWNER:%s\n", meta->owner);
     fprintf(fp, "CREATED:%ld\n", (long)meta->created_time);
+    fprintf(fp, "LAST_MODIFIED:%ld\n", (long)meta->last_modified);
     fprintf(fp, "LAST_ACCESS:%ld\n", (long)meta->last_accessed);
     fprintf(fp, "READ_USERS:%s\n", meta->read_users);
     fprintf(fp, "WRITE_USERS:%s\n", meta->write_users);
