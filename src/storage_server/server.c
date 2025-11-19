@@ -320,7 +320,7 @@ int main() {
             int show_all = (strstr(buffer, "-a") != NULL) || (strstr(buffer, "-la") != NULL);
             int show_long = (strstr(buffer, "-l") != NULL) || (strstr(buffer, "-al") != NULL) || (strstr(buffer, "-la") != NULL);
             
-            list_files(client_sock, show_all, show_long);
+            list_files(client_sock, show_all, show_long, username);
         } 
         else if (strncmp(buffer, "READ ", 5) == 0) {
             // Extract filename from command
