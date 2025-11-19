@@ -1,5 +1,5 @@
-
 #include "../../include/common.h"
+#include "../../include/logger.h"
 
 #include <netinet/in.h>
 #include <errno.h>
@@ -38,6 +38,7 @@ static int num_file_entries = 0;
 static int add_storage_server(const char *ip, int nm_port, int client_port_from_reg, const char *files) {
     // Step 1: Ping all registered storage servers and remove any that are unreachable
     int i = 0;
+    log_event(LOG_INFO, "Received storage server registration request from IP=%s, NM_PORT=%d, CLIENT_PORT=%d", ip, nm_port, client_port_from_reg);
     while (i < num_storage_servers) {
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) { ++i; continue; }
@@ -51,10 +52,9 @@ static int add_storage_server(const char *ip, int nm_port, int client_port_from_
         int res = connect(sock, (struct sockaddr*)&sa, sizeof(sa));
         close(sock);
         if (res < 0) {
-            // Remove this server
+            log_event(LOG_WARN, "Removing unreachable storage server: IP=%s, CLIENT_PORT=%d", storage_servers[i].ip, storage_servers[i].client_port);
             for (int j = i; j < num_storage_servers - 1; ++j) storage_servers[j] = storage_servers[j + 1];
             num_storage_servers--;
-            // Do not increment i, as we just shifted
         } else {
             ++i;
         }
@@ -239,12 +239,18 @@ int main() {
 
     printf("Name server started. Listening on port %d...\n", NAME_SERVER_PORT);
 
+
     while (1) {
         client_sock = accept(listen_fd, (struct sockaddr*)&client_addr, &addr_len);
         if (client_sock < 0) {
             perror("Accept failed");
             continue;
         }
+
+        char client_ip[64];
+        unsigned short client_port = 0;
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
+        client_port = ntohs(client_addr.sin_port);
 
         // Peek at the incoming data to detect registration messages
         char peek[8192];
@@ -299,8 +305,10 @@ int main() {
             char auth_resp[128];
             if (authenticated) {
                 snprintf(auth_resp, sizeof(auth_resp), "AUTH:SUCCESS\n");
+                log_event(LOG_INFO, "Authentication SUCCESS for user '%s' from IP=%s:%u", username, client_ip, client_port);
             } else {
                 snprintf(auth_resp, sizeof(auth_resp), "AUTH:FAILED\n");
+                log_event(LOG_WARN, "Authentication FAILED for user '%s' from IP=%s:%u", username, client_ip, client_port);
             }
             send(client_sock, auth_resp, strlen(auth_resp), 0);
             close(client_sock);
@@ -320,7 +328,7 @@ int main() {
             char *line = strtok_r(regbuf, "\n", &saveptr);
             char ipstr[64] = "127.0.0.1";
             int nm_port = NAME_SERVER_PORT;
-            int client_port = 0;
+            int client_port_reg = 0;
             char files[4096] = "";
             while (line) {
                 if (strncmp(line, "IP:", 3) == 0) {
@@ -328,19 +336,22 @@ int main() {
                 } else if (strncmp(line, "NM_PORT:", 8) == 0) {
                     nm_port = atoi(line + 8);
                 } else if (strncmp(line, "CLIENT_PORT:", 12) == 0) {
-                    client_port = atoi(line + 12);
+                    client_port_reg = atoi(line + 12);
                 } else if (strncmp(line, "FILES:", 6) == 0) {
                     strncpy(files, line + 6, sizeof(files)-1);
                 }
                 line = strtok_r(NULL, "\n", &saveptr);
             }
 
-            int ss_id = add_storage_server(ipstr, nm_port, client_port, files);
+            log_event(LOG_INFO, "Received TYPE:REGISTER_SS from IP=%s:%u (reported IP=%s, NM_PORT=%d, CLIENT_PORT=%d)", client_ip, client_port, ipstr, nm_port, client_port_reg);
+            int ss_id = add_storage_server(ipstr, nm_port, client_port_reg, files);
             char resp[128];
             if (ss_id >= 0) {
                 snprintf(resp, sizeof(resp), "SS_ID:%d\n", ss_id);
+                log_event(LOG_INFO, "Storage server registered: SS_ID=%d, IP=%s, NM_PORT=%d, CLIENT_PORT=%d", ss_id, ipstr, nm_port, client_port_reg);
             } else {
                 snprintf(resp, sizeof(resp), "SS_ID:-1\n");
+                log_event(LOG_ERROR, "Storage server registration FAILED for IP=%s, NM_PORT=%d, CLIENT_PORT=%d", ipstr, nm_port, client_port_reg);
             }
             send(client_sock, resp, strlen(resp), 0);
             close(client_sock);
