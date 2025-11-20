@@ -43,10 +43,20 @@ void file_info(int client_sock, const char *filename, const char *username) {
     char created_str[64] = "N/A";
     char read_users_str[512] = "N/A";
     char write_users_str[512] = "N/A";
+    char atime[64] = "N/A";
+    char mtime[64] = "N/A";
     
     if (read_metadata_file(filename, &meta) == 0) {
         strncpy(owner_str, meta.owner, sizeof(owner_str) - 1);
-        strftime(created_str, sizeof(created_str), "%Y-%m-%d %H:%M:%S", localtime(&meta.created_time));
+        if (meta.created_time > 0) {
+            strftime(created_str, sizeof(created_str), "%Y-%m-%d %H:%M:%S", localtime(&meta.created_time));
+        }
+        if (meta.last_accessed > 0) {
+            strftime(atime, sizeof(atime), "%Y-%m-%d %H:%M:%S", localtime(&meta.last_accessed));
+        }
+        if (meta.last_modified > 0) {
+            strftime(mtime, sizeof(mtime), "%Y-%m-%d %H:%M:%S", localtime(&meta.last_modified));
+        }
         strncpy(read_users_str, meta.read_users, sizeof(read_users_str) - 1);
         strncpy(write_users_str, meta.write_users, sizeof(write_users_str) - 1);
     }
@@ -54,11 +64,6 @@ void file_info(int client_sock, const char *filename, const char *username) {
     char response[2048];
     char perm_str[10];
     get_permissions_string(st.st_mode, perm_str);
-
-    // Convert timestamps
-    char atime[64], mtime[64];
-    strftime(atime, sizeof(atime), "%Y-%m-%d %H:%M:%S", localtime(&meta.last_accessed));
-    strftime(mtime, sizeof(mtime), "%Y-%m-%d %H:%M:%S", localtime(&meta.last_modified));
 
     sprintf(response,
         "------------------- FILE INFO -------------------\n"
