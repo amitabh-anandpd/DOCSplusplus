@@ -12,6 +12,7 @@ int main() {
     struct sockaddr_in server_addr;
     char buffer[2048], command[100];
     int target_port;
+    char target_ip[64];
     char username[64], password[64];
     
     // Print welcome banner
@@ -133,7 +134,7 @@ if (strncmp(command, "STREAM", 6) == 0) {
     char filename[256];
     sscanf(command + 7, "%s", filename);
     
-    // Step 1: Connect to Name Server to get storage server ID
+    // Step 1: Connect to Name Server to get storage server IP and port
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("Socket creation failed");
@@ -142,7 +143,7 @@ if (strncmp(command, "STREAM", 6) == 0) {
     
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(NAME_SERVER_PORT);
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_addr.s_addr = inet_addr(NAME_SERVER_IP);
     
     if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("Connection to Name Server failed");
@@ -150,7 +151,7 @@ if (strncmp(command, "STREAM", 6) == 0) {
         continue;
     }
     
-    // Send INFO command to get storage server ID
+    // Send INFO command to get storage server location
     char info_cmd[512];
     snprintf(info_cmd, sizeof(info_cmd), "INFO %s", filename);
     send(sock, info_cmd, strlen(info_cmd), 0);
@@ -160,23 +161,29 @@ if (strncmp(command, "STREAM", 6) == 0) {
     buffer[bytes] = '\0';
     close(sock);
     
-    // Parse storage server ID
-    int ss_id = -1;
-    char *id_line = strstr(buffer, "Storage Server ID:");
-    if (id_line) {
-        sscanf(id_line, "Storage Server ID: %d", &ss_id);
+    // Parse storage server IP and port
+    char ss_ip[64] = "", *ip_line = strstr(buffer, "Storage Server IP:");
+    int ss_port = -1;
+    if (ip_line) {
+        sscanf(ip_line, "Storage Server IP: %63s", ss_ip);
+        char *port_line = strstr(buffer, "Storage Server Port:");
+        if (port_line) {
+            sscanf(port_line, "Storage Server Port: %d", &ss_port);
+        }
     }
-    
-    if (ss_id < 0) {
+    if (strlen(ss_ip) == 0 || ss_port <= 0) {
         printf("Error: Could not find storage server for file '%s'\n", filename);
         printf("%s\n", buffer);
         continue;
     }
-    
     // Step 2: Connect to the correct storage server
-    target_port = STORAGE_SERVER_PORT + ss_id;
+    target_port = ss_port;
+    strncpy(target_ip, ss_ip, sizeof(target_ip)-1);
+    target_ip[sizeof(target_ip)-1] = '\0';
 } else {
     target_port = NAME_SERVER_PORT;
+    strncpy(target_ip, NAME_SERVER_IP, sizeof(target_ip)-1);
+    target_ip[sizeof(target_ip)-1] = '\0';
 }
 
         sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -187,7 +194,7 @@ if (strncmp(command, "STREAM", 6) == 0) {
 
         server_addr.sin_family = AF_INET;
         server_addr.sin_port = htons(target_port);
-        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        server_addr.sin_addr.s_addr = inet_addr(target_ip);
 
         if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
             perror("Connection failed");

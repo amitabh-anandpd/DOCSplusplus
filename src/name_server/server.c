@@ -1036,10 +1036,17 @@ int main() {
             // The storage server connection is already established above
             char relay[4096]; 
             ssize_t rcv;
+            // Buffer to accumulate the info response
+            char info_accum[8192] = "";
             while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
                 relay[rcv]='\0'; 
-                send(client_sock, relay, strlen(relay), 0); 
+                if (strlen(info_accum) + rcv + 1 < sizeof(info_accum)) strcat(info_accum, relay);
             }
+            // Prepend SS location info for client parsing
+            char ss_location[256];
+            snprintf(ss_location, sizeof(ss_location), "Storage Server IP: %s\nStorage Server Port: %d\n", ssi->ip, ssi->client_port);
+            send(client_sock, ss_location, strlen(ss_location), 0);
+            send(client_sock, info_accum, strlen(info_accum), 0);
             close(storage_sock);
             close(client_sock);
             exit(0);
