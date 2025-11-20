@@ -318,7 +318,7 @@ int main() {
         // printf("\n");
         // fflush(stdout);
 
-        if (strncmp(buffer, "VIEW ", 5) == 0 || strcmp(buf, "VIEW") == 0) {
+        if (strncmp(buffer, "VIEW ", 5) == 0 || strcmp(buffer, "VIEW") == 0) {
             // Parse flags from the command
             int show_all = (strstr(buffer, "-a") != NULL) || (strstr(buffer, "-la") != NULL);
             int show_long = (strstr(buffer, "-l") != NULL) || (strstr(buffer, "-al") != NULL) || (strstr(buffer, "-la") != NULL);
