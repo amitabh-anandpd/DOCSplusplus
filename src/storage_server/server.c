@@ -458,7 +458,79 @@ int main() {
                 send(client_sock, msg, strlen(msg), 0);
             }
         }
-
+        else if (strncmp(buffer, "ADDACCESS ", 10) == 0) {
+            // Parse: ADDACCESS -R|-W <filename> <target_username>
+            char flag[8], filename[256], target_user[64];
+            char response[512];
+            
+            if (sscanf(buffer + 10, "%s %s %s", flag, filename, target_user) != 3) {
+                char msg[] = "Usage: ADDACCESS -R|-W <filename> <target_username>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            } else {
+                // Check if file exists and requester is the owner
+                FileMetadata meta;
+                if (read_metadata_file(filename, &meta) != 0) {
+                    snprintf(response, sizeof(response), "Error: File '%s' not found\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else if (strcmp(meta.owner, username) != 0) {
+                    snprintf(response, sizeof(response), "Error: Only the owner can grant access to '%s'\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else {
+                    // Add access
+                    int result = -1;
+                    if (strcmp(flag, "-R") == 0) {
+                        result = add_read_access(filename, target_user);
+                        if (result == 0) {
+                            snprintf(response, sizeof(response), "Success: Read access granted to '%s' for file '%s'\n", target_user, filename);
+                        } else {
+                            snprintf(response, sizeof(response), "Info: User '%s' already has read access to '%s'\n", target_user, filename);
+                        }
+                    } else if (strcmp(flag, "-W") == 0) {
+                        result = add_write_access(filename, target_user);
+                        if (result == 0) {
+                            snprintf(response, sizeof(response), "Success: Write access granted to '%s' for file '%s'\n", target_user, filename);
+                        } else {
+                            snprintf(response, sizeof(response), "Info: User '%s' already has write access to '%s'\n", target_user, filename);
+                        }
+                    } else {
+                        snprintf(response, sizeof(response), "Error: Invalid flag '%s'. Use -R for read or -W for write\n", flag);
+                    }
+                    send(client_sock, response, strlen(response), 0);
+                }
+            }
+        }
+        else if (strncmp(buffer, "REMACCESS ", 10) == 0) {
+            // Parse: REMACCESS <filename> <target_username>
+            char filename[256], target_user[64];
+            char response[512];
+            
+            if (sscanf(buffer + 10, "%s %s", filename, target_user) != 2) {
+                char msg[] = "Usage: REMACCESS <filename> <target_username>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            } else {
+                // Check if file exists and requester is the owner
+                FileMetadata meta;
+                if (read_metadata_file(filename, &meta) != 0) {
+                    snprintf(response, sizeof(response), "Error: File '%s' not found\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else if (strcmp(meta.owner, username) != 0) {
+                    snprintf(response, sizeof(response), "Error: Only the owner can revoke access to '%s'\n", filename);
+                    send(client_sock, response, strlen(response), 0);
+                } else if (strcmp(target_user, username) == 0) {
+                    snprintf(response, sizeof(response), "Error: Cannot revoke owner's access\n");
+                    send(client_sock, response, strlen(response), 0);
+                } else {
+                    // Remove access
+                    int result = remove_all_access(filename, target_user);
+                    if (result == 0) {
+                        snprintf(response, sizeof(response), "Success: All access revoked for '%s' on file '%s'\n", target_user, filename);
+                    } else {
+                        snprintf(response, sizeof(response), "Error: Failed to revoke access\n");
+                    }
+                    send(client_sock, response, strlen(response), 0);
+                }
+            }
+        }
         else {
             char msg[] = "Invalid command.\n";
             send(client_sock, msg, strlen(msg), 0);
