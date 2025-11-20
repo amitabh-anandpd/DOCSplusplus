@@ -16,7 +16,7 @@
 #define STORAGE_SERVER_PORT 8081
 #define STORAGE_DIR "./storage"
 #define STORAGE_SERVER_IP "127.0.0.1"
-#define NAME_SERVER_IP "127.0.0.1"
+#define NAME_SERVER_IP "172.19.82.9"
 
 int get_storage_id(void);
 
