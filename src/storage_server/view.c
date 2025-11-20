@@ -29,83 +29,90 @@ void count_file(const char* path, int* words, int* chars) {
 // Function to list files
 // MODIFY THIS FUNCTION - add username parameter
 void list_files(int client_sock, int show_all, int show_long, const char* username) {
-    DIR *dir;
-    struct dirent *entry;
-    struct stat file_stat;
-    char path[512], response[8192];
-    
-    // Open per-server files directory
-    char server_files_dir[512];
-    sprintf(server_files_dir, "%s/storage%d/files", STORAGE_DIR, get_storage_id());
-    
-    dir = opendir(server_files_dir);
+    char response[32768];
+    response[0] = '\0';
+
+    char files_dir[PATH_MAX];
+    snprintf(files_dir, sizeof(files_dir), "%s/storage%d/files", STORAGE_DIR, get_storage_id());
+    DIR *dir = opendir(files_dir);
     if (!dir) {
-        sprintf(response, "Error: Cannot open storage directory\n");
+        snprintf(response, sizeof(response), "ERROR: Cannot open files directory.\n");
         send(client_sock, response, strlen(response), 0);
         return;
     }
-    
-    strcpy(response, "");
-    
-    // If showing long format, print the header
+
+    int file_count = 0;
+    struct dirent *entry;
+
     if (show_long) {
-        strcat(response, "---------------------------------------------------------\n");
-        strcat(response, "|  Filename  | Words | Chars | Last Access Time | Owner |\n");
-        strcat(response, "|------------|-------|-------|------------------|-------|\n");
+        strncat(response,
+            "\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+            "┃ Files (long view)                                                                    ┃\n"
+            "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+            "┌────────────────────┬────────┬────────┬────────────────────┬────────────┬──────────────┐\n"
+            "│ Name               │ Words  │ Chars  │ Last Access        │ Owner      │ Modified     │\n"
+            "├────────────────────┼────────┼────────┼────────────────────┼────────────┼──────────────┤\n",
+            sizeof(response) - strlen(response) - 1);
     }
-    
-    int file_count = 0;  // Track how many files user can see
-    
+
     while ((entry = readdir(dir)) != NULL) {
-        // Skip . and ..
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-            continue;
-        
-        // ADD THIS: Check if user has read access to this file
-        if (!show_all && !check_read_access(entry->d_name, username)) {
-            continue;  // Skip files user doesn't have access to
-        }
-        
-        sprintf(path, "%s/storage%d/files/%s", STORAGE_DIR, get_storage_id(), entry->d_name);
-        if (stat(path, &file_stat) != 0) {
+        if (!show_all && entry->d_name[0] == '.') continue;
+        if (entry->d_type != DT_REG) continue;
+
+        char path[PATH_MAX];
+        int plen = snprintf(path, sizeof(path), "%s/%s", files_dir, entry->d_name);
+        if (plen < 0 || plen >= (int)sizeof(path)) {
+            // Skip overly long path (avoids truncation warning treated as error)
             continue;
         }
-        
+
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+
         if (show_long) {
             int word_count = 0, char_count = 0;
             count_file(path, &word_count, &char_count);
 
-            // NEW: pull owner & last access from metadata file instead of filesystem user
             FileMetadata meta;
             const char *owner = "unknown";
-            time_t last_access_raw = file_stat.st_atime;
+            time_t last_access_raw = st.st_atime;
+            time_t last_mod_raw    = st.st_mtime;
 
             if (read_metadata_file(entry->d_name, &meta) == 0) {
-                if (meta.owner[0] != '\0') owner = meta.owner;
+                if (meta.owner[0]) owner = meta.owner;
                 if (meta.last_accessed > 0) last_access_raw = meta.last_accessed;
+                if (meta.last_modified > 0) last_mod_raw    = meta.last_modified;
             }
-            
-            char access_time[64];
-            strftime(access_time, sizeof(access_time), "%Y-%m-%d %H:%M",
-                     localtime(&last_access_raw));
 
-            char line[512];
-            sprintf(line, "| %-10s| %-5d | %-5d | %-16s | %-10s |\n",
-                    entry->d_name, word_count, char_count, access_time, owner);
-            strcat(response, line);
+            char access_buf[32], mod_buf[32];
+            strftime(access_buf, sizeof(access_buf), "%Y-%m-%d %H:%M", localtime(&last_access_raw));
+            strftime(mod_buf,    sizeof(mod_buf),    "%Y-%m-%d %H:%M", localtime(&last_mod_raw));
+
+            char line[256];
+            snprintf(line, sizeof(line),
+                "│ %-19.20s│ %6d │ %6d │ %-18.20s │ %-10.12s │ %-11.12s │\n",
+                entry->d_name, word_count, char_count, access_buf, owner, mod_buf);
+
+            strncat(response, line, sizeof(response) - strlen(response) - 1);
         } else {
-            strcat(response, entry->d_name);
-            strcat(response, "\n");
+            strncat(response, entry->d_name, sizeof(response) - strlen(response) - 2);
+            strncat(response, "\n", sizeof(response) - strlen(response) - 1);
         }
-        
         file_count++;
     }
-    
     closedir(dir);
-    
-    if (file_count == 0) {
-        strcpy(response, "(no files found or no access)\n");
+
+    if (show_long) {
+        strncat(response,
+            "└────────────────────┴────────┴────────┴────────────────────┴────────────┴──────────────┘\n",
+            sizeof(response) - strlen(response) - 1);
+        char summary[128];
+        snprintf(summary, sizeof(summary), "Total files: %d (storage server %d)\n",
+                 file_count, get_storage_id());
+        strncat(response, summary, sizeof(response) - strlen(response) - 1);
+    } else if (file_count == 0) {
+        strncat(response, "(no files found or no access)\n", sizeof(response) - strlen(response) - 1);
     }
-    
+
     send(client_sock, response, strlen(response), 0);
 }
