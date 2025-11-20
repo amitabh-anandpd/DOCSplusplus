@@ -25,10 +25,12 @@ void log_event(const char *level, const char *fmt, ...) {
     char logline[2200];
     snprintf(logline, sizeof(logline), "[%s] [%s] %s\n", timebuf, level, msg);
 
-    // Print to terminal
-    fputs(logline, stdout);
-    fflush(stdout);
-    // Write to log file
+    // Print to terminal only for non-DEBUG messages
+    if (strcmp(level, "DEBUG") != 0) {
+        fputs(logline, stdout);
+        fflush(stdout);
+    }
+    // Write to log file (always)
     fputs(logline, fp);
     fclose(fp);
 }
