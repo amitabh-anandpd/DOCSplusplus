@@ -1,6 +1,43 @@
 #include "../../include/common.h"
 #include "../../include/write.h"
 #include "../../include/acl.h"
+#include <unistd.h>   // for access(), unlink()
+#include <time.h>
+
+// Forward (from server.c)
+extern int get_storage_id(void);
+
+// Swap helpers
+static void make_swap_path(char *buf, size_t sz, const char *filename, int sentence_num) {
+    snprintf(buf, sz, "%s/storage%d/swap/%s.%d.swap", STORAGE_DIR, get_storage_id(), filename, sentence_num);
+}
+
+static int write_swap(const char *filename, int sentence_num, const char *content) {
+    char spath[512];
+    make_swap_path(spath, sizeof(spath), filename, sentence_num);
+    FILE *sf = fopen(spath, "w");
+    if (!sf) return -1;
+    fwrite(content, 1, strlen(content), sf);
+    fclose(sf);
+    return 0;
+}
+
+static int read_swap(const char *filename, int sentence_num, char *out, size_t outsz) {
+    char spath[512];
+    make_swap_path(spath, sizeof(spath), filename, sentence_num);
+    FILE *sf = fopen(spath, "r");
+    if (!sf) return -1;
+    size_t r = fread(out, 1, outsz - 1, sf);
+    out[r] = '\0';
+    fclose(sf);
+    return 0;
+}
+
+static void remove_swap(const char *filename, int sentence_num) {
+    char spath[512];
+    make_swap_path(spath, sizeof(spath), filename, sentence_num);
+    unlink(spath);
+}
 
 #define MAX_SENTENCES 200
 #define MAX_SENT_LEN 4096
@@ -168,6 +205,15 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
     sprintf(msg, "Sentence %d locked. You may begin writing.\n", sentence_num);
     send(client_sock, msg, strlen(msg), 0);
 
+    // After determining working_sentence (existing or new):
+    // Initialize swap file with current working sentence (or empty for new)
+    if (write_swap(filename, sentence_num, working_sentence) != 0) {
+        char msg[] = "ERROR: Could not create swap file.\n";
+        send(client_sock, msg, strlen(msg), 0);
+        remove_lock(filename, sentence_num);
+        return;
+    }
+
     while (1) {
         printf("[DEBUG] Top of write loop for %s\n", filename);
         char recv_buf[1024];
@@ -189,18 +235,15 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
         printf("recv_buf: %s\n", recv_buf);
         // ETIRW → finish
         if (strncmp(recv_buf, "ETIRW", 5) == 0) {
-            // Update the sentence we were editing
+            // On finish: load final sentence from swap (if present)
+            char final_sentence[MAX_SENT_LEN];
+            if (read_swap(filename, sentence_num, final_sentence, sizeof(final_sentence)) == 0) {
+                strcpy(working_sentence, final_sentence);
+            }
+            // Move final sentence into sentences array
             strcpy(sentences[sentence_num], working_sentence);
-            
-            // If this was a new sentence at the end, increment count
-            if (sentence_num >= sentence_count) {
-                sentence_count = sentence_num + 1;
-            }
-            
-            // Ensure non-empty content (add delimiter if missing)
-            if (strlen(working_sentence) == 0) {
-                strcpy(sentences[sentence_num], ".");
-            }
+            if (sentence_num >= sentence_count) sentence_count = sentence_num + 1;
+            if (strlen(working_sentence) == 0) strcpy(sentences[sentence_num], ".");
 
             // Recombine file
             fp = fopen(path, "w");
@@ -244,7 +287,9 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
                     printf("[DEBUG] Failed to create meta file for: %s\n", filename);
                 }
             }
+            remove_swap(filename, sentence_num);
             remove_lock(filename, sentence_num);
+
             char done[] = "Write Successful!\n";
             send(client_sock, done, strlen(done), 0);
             break;
@@ -304,7 +349,21 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
             strcpy(working_sentence, new_sentence);
         }
 
+        // Persist current working sentence to swap file
+        if (write_swap(filename, sentence_num, working_sentence) != 0) {
+            char err[] = "ERROR: Failed to update swap file.\n";
+            send(client_sock, err, strlen(err), 0);
+            // Do not abort session; continue allowing edits
+        }
+
         char ok[] = "Update applied successfully.\n";
         send(client_sock, ok, strlen(ok), 0);
+    }
+
+    // If loop exits unexpectedly (connection drop), cleanup
+    // (Only cleanup if lock still present; swap is discarded)
+    if (is_locked(filename, sentence_num)) {
+        remove_lock(filename, sentence_num);
+        remove_swap(filename, sentence_num);
     }
 }
