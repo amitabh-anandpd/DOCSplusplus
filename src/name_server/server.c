@@ -358,6 +358,37 @@ void proxy_bidirectional(int a_sock, int b_sock) {
     }
 }
 
+static void log_req(const char *level, const char *op,
+                    const char *user, const char *ip, int port,
+                    const char *file, int sentence, const char *extra) {
+    log_event(level,
+      "OP=%s USER=%s SRC=%s:%d FILE=%s SENTENCE=%d %s",
+      op,
+      user ? user : "-",
+      ip ? ip : "-",
+      port,
+      file ? file : "-",
+      sentence,
+      extra ? extra : "");
+}
+
+// Example logging in command handlers
+void handle_write(int client_sock, const char *filename, const char *username, const char *client_ip, int client_port) {
+    log_req(LOG_INFO, "WRITE", username, client_ip, client_port, filename, -1, "START");
+
+    // Implement your write logic here
+    int write_success = 0; // Initialize write_success
+
+    // Example write operation (replace with actual logic)
+    // write_success = perform_write_operation(filename, content);
+
+    if (write_success) {
+        log_req(LOG_INFO, "WRITE", username, client_ip, client_port, filename, -1, "SUCCESS");
+    } else {
+        log_req(LOG_ERROR, "WRITE", username, client_ip, client_port, filename, -1, "FAIL: write error");
+    }
+}
+
 int main() {
 
     int listen_fd, client_sock;
