@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include "../../include/undo.h" 
+#include "../../include/checkpoint.h"
 // Global storage server ID so helpers (e.g., write.c) can query it
 static int g_storage_id = 0;
 int get_storage_id(void) { return g_storage_id; }
@@ -131,6 +132,8 @@ void initialize_storage_folders(int ss_id) {
     ensure_dir(tmp);
 
     sprintf(tmp, "%s/meta", STORAGE_BASE);
+    ensure_dir(tmp);
+    sprintf(tmp, "%s/checkpoints", STORAGE_BASE);
     ensure_dir(tmp);
 }
 
@@ -416,6 +419,46 @@ int main() {
                 undo_last_change(client_sock, filename, username);
             }
         }
+
+        // Add after the UNDO command handler (around line 200+)
+
+        else if (strncmp(buffer, "CHECKPOINT ", 11) == 0) {
+            char filename[256], tag[64];
+            if (sscanf(buffer + 11, "%s %s", filename, tag) == 2) {
+                checkpoint_create(client_sock, filename, tag, username, g_storage_id);
+            } else {
+                char msg[] = "Usage: CHECKPOINT <filename> <tag>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            }
+        }
+        else if (strncmp(buffer, "VIEWCHECKPOINT ", 15) == 0) {
+            char filename[256], tag[64];
+            if (sscanf(buffer + 15, "%s %s", filename, tag) == 2) {
+                checkpoint_view(client_sock, filename, tag, username, g_storage_id);
+            } else {
+                char msg[] = "Usage: VIEWCHECKPOINT <filename> <tag>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            }
+        }
+        else if (strncmp(buffer, "REVERT ", 7) == 0) {
+            char filename[256], tag[64];
+            if (sscanf(buffer + 7, "%s %s", filename, tag) == 2) {
+                checkpoint_revert(client_sock, filename, tag, username, g_storage_id);
+            } else {
+                char msg[] = "Usage: REVERT <filename> <tag>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            }
+        }
+        else if (strncmp(buffer, "LISTCHECKPOINTS ", 16) == 0) {
+            char filename[256];
+            if (sscanf(buffer + 16, "%s", filename) == 1) {
+                checkpoint_list(client_sock, filename, username, g_storage_id);
+            } else {
+                char msg[] = "Usage: LISTCHECKPOINTS <filename>\n";
+                send(client_sock, msg, strlen(msg), 0);
+            }
+        }
+
         else {
             char msg[] = "Invalid command.\n";
             send(client_sock, msg, strlen(msg), 0);
