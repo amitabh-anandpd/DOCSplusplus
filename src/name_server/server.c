@@ -928,7 +928,7 @@ int main() {
 
 
         // VIEW must go to all storage servers and aggregate
-        if (strncmp(buf, "VIEW", 4) == 0) {
+        if (strncmp(buf, "VIEW ", 5) == 0) {
             char aggregate[65536];
             aggregate[0] = '\0';
             for (int i = 0; i < num_storage_servers; ++i) {
