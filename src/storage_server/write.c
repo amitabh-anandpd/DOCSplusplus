@@ -62,6 +62,7 @@ void remove_lock(const char *filename, int sentence_num) {
 
 // --- Core WRITE logic ---
 void write_to_file(int client_sock, const char *filename, int sentence_num, const char *username) {
+    printf("[DEBUG] Entered write_to_file for %s (sentence_num=%d, user=%s)\n", filename, sentence_num, username);
     // Check write access
     if (!check_write_access(filename, username)) {
         char msg[256];
@@ -168,6 +169,7 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
     send(client_sock, msg, strlen(msg), 0);
 
     while (1) {
+        printf("[DEBUG] Top of write loop for %s\n", filename);
         char recv_buf[1024];
         memset(recv_buf, 0, sizeof(recv_buf));
         ssize_t n = read(client_sock, recv_buf, sizeof(recv_buf) - 1);
@@ -183,7 +185,8 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
         // Remove trailing newline/carriage return
         recv_buf[strcspn(recv_buf, "\n")] = '\0';
         recv_buf[strcspn(recv_buf, "\r")] = '\0';
-
+        printf("[DEBUG] Received command: '%s'\n", recv_buf);
+        printf("recv_buf: %s\n", recv_buf);
         // ETIRW → finish
         if (strncmp(recv_buf, "ETIRW", 5) == 0) {
             // Update the sentence we were editing
@@ -220,14 +223,34 @@ void write_to_file(int client_sock, const char *filename, int sentence_num, cons
 
             // Update last_modified in meta file
             FileMetadata meta;
-            if (read_metadata_file(filename, &meta) == 0) {
+            printf("[DEBUG] Attempting to update metadata for file: %s\n", filename);
+            int meta_ret = read_metadata_file(filename, &meta);
+            printf("[DEBUG] read_metadata_file returned: %d\n", meta_ret);
+            if (meta_ret == 0) {
                 meta.last_modified = time(NULL);
+                printf("[DEBUG] Updated metadata, calling update_metadata_file\n");
                 update_metadata_file(filename, &meta);
+            } else {
+                printf("[DEBUG] Meta file missing or unreadable, attempting to create meta file for: %s\n", filename);
+                if (create_metadata_file(filename, username) == 0) {
+                    printf("[DEBUG] Meta file created. Now updating last_modified.\n");
+                    if (read_metadata_file(filename, &meta) == 0) {
+                        meta.last_modified = time(NULL);
+                        update_metadata_file(filename, &meta);
+                    } else {
+                        printf("[DEBUG] Still unable to read meta file after creation.\n");
+                    }
+                } else {
+                    printf("[DEBUG] Failed to create meta file for: %s\n", filename);
+                }
             }
             remove_lock(filename, sentence_num);
             char done[] = "Write Successful!\n";
             send(client_sock, done, strlen(done), 0);
             break;
+        }
+        else{
+            printf("[DEBUG] Received non-ETIRW command: %s\n", recv_buf);
         }
 
         // Parse "<word_index> <content...>"
