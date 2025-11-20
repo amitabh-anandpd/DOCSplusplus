@@ -1,6 +1,6 @@
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/0ek2UV58)
 
-# Distributed File Service
+# Docs++
 
 A minimal distributed file system with:
 - Name Server (NM): central index, metadata & access control.
@@ -15,6 +15,8 @@ A minimal distributed file system with:
 - Streaming: STREAM <file> (direct SS fetch after LOCATE)
 - Location: LOCATE <file> returns SS_IP / SS_PORT
 - Info: INFO <file> returns metadata + storage location
+- Undo last sentence write: UNDO <file>
+- Checkpoints (versioning): CHECKPOINT / VIEWCHECKPOINT / REVERT / LISTCHECKPOINTS
 
 ## Process Roles
 ### Name Server
@@ -42,15 +44,23 @@ A minimal distributed file system with:
 ## Command Summary (Client → NM unless noted)
 | Command | Purpose |
 |---------|---------|
-| INFO <file> | Show metadata + location |
-| CREATE <file> | Create empty file (metadata initialized) |
-| DELETE <file> | Remove file from all SS where indexed |
-| READ <file> <sentence_num> | Read sentence (updates LAST_ACCESS) |
-| WRITE <file> <sentence_num> | Interactive write (updates LAST_MODIFIED + LAST_ACCESS) |
-| ADDACCESS -R|-W <file> <user> | Grant read or write to user |
-| REMACCESS <file> <user> | Revoke all non-owner access |
+| VIEW [-a|-l|-al] | List files (optional flags for all/long) |
+| CREATE <file> | Create empty file (initialize metadata) |
+| READ <file> <sentence_num> | Read one sentence |
+| WRITE <file> <sentence_num> | Interactive write / edit sentence |
+| DELETE <file> | Delete file |
+| INFO <file> | Show metadata + storage location |
+| STREAM <file> | Stream full file (uses LOCATE then direct SS) |
 | LOCATE <file> | Get SS_IP / SS_PORT |
-| STREAM <file> | Fetch full file directly from SS after LOCATE |
+| ADDACCESS -R|-W <file> <user> | Grant read or write access |
+| REMACCESS <file> <user> | Revoke user access (not owner) |
+| UNDO <file> | Undo last WRITE sentence change |
+| CHECKPOINT <file> <tag> | Create tagged checkpoint |
+| VIEWCHECKPOINT <file> <tag> | View checkpoint content |
+| REVERT <file> <tag> | Restore file content from checkpoint |
+| LISTCHECKPOINTS <file> | List all checkpoints for file |
+| MENU or HELP | Show command menu again |
+| EXIT / QUIT | Leave client |
 
 ## Metadata File Format (storage_server/meta/<filename>.meta)
 ```
@@ -86,16 +96,30 @@ On Client host:
 NAME_SERVER_IP=<nm_ip> ./client.out
 ```
 
+## Checkpoint & Undo System
+| Command | Description |
+|---------|-------------|
+| UNDO <file> | Reverts the last WRITE sentence change if available |
+| CHECKPOINT <file> <tag> | Saves a snapshot of the entire file under a tag |
+| VIEWCHECKPOINT <file> <tag> | Streams the content of the checkpoint |
+| REVERT <file> <tag> | Restores file from a checkpoint |
+| LISTCHECKPOINTS <file> | Lists all checkpoints (tag, timestamp, size, creator) |
+
+Checkpoint files stored at: `storage/storageX/checkpoints/`
+Naming: `<sanitized_filename>_<tag>.ckpt` with companion `.meta` (timestamp, creator).
+
 ## Typical Session
 ```
 USER:admin
 PASS:admin123
 CREATE notes.txt
 WRITE notes.txt 0
-READ notes.txt 0
-ADDACCESS -R notes.txt alice
-INFO notes.txt
-LOCATE notes.txt
+UNDO notes.txt
+CHECKPOINT notes.txt base
+WRITE notes.txt 1
+LISTCHECKPOINTS notes.txt
+VIEWCHECKPOINT notes.txt base
+REVERT notes.txt base
 STREAM notes.txt
 ```
 
