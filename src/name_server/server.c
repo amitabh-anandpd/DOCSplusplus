@@ -735,6 +735,39 @@ int main() {
             exit(0);
         }
 
+
+        // LOCATE command: does not require authentication
+        if (strncmp(buf, "LOCATE ", 7) == 0) {
+            char filename[256] = "";
+            sscanf(buf + 7, "%255s", filename);
+            int ss_id = -1;
+            FileMeta *meta = find_filemeta(filename);
+            if (meta && meta->ss_count > 0) {
+                for (int i = 0; i < meta->ss_count; ++i) {
+                    StorageServerInfo *ssi = find_ss_by_id(meta->ss_ids[i]);
+                    if (ssi && ssi->active) { ss_id = ssi->id; break; }
+                }
+            }
+            if (ss_id < 0) {
+                const char *msg = "Error: File not found or not indexed on any storage server.\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            StorageServerInfo *ssi = find_ss_by_id(ss_id);
+            if (!ssi) {
+                const char *msg = "Error: Storage server not found.\n";
+                send(client_sock, msg, strlen(msg), 0);
+                close(client_sock);
+                exit(0);
+            }
+            char resp[256];
+            snprintf(resp, sizeof(resp), "SS_IP: %s\nSS_PORT: %d\n", ssi->ip, ssi->client_port);
+            send(client_sock, resp, strlen(resp), 0);
+            close(client_sock);
+            exit(0);
+        }
+
         // Parse authentication credentials
         char username[64] = "", password[64] = "", command[4096] = "";
         char *line_ptr = buf;
