@@ -46,8 +46,8 @@ int read_metadata_file(const char *filename, FileMetadata *meta) {
             strncpy(meta->owner, line + 6, sizeof(meta->owner) - 1);
         } else if (strncmp(line, "CREATED:", 8) == 0) {
             meta->created_time = (time_t)atol(line + 8);
-        } else if (strncmp(line, "LAST_MODIFIED:", 12) == 0) {
-            meta->last_modified = (time_t)atol(line + 12);
+        } else if (strncmp(line, "LAST_MODIFIED:", 14) == 0) {
+            meta->last_modified = (time_t)atol(line + 14);
         } else if (strncmp(line, "LAST_ACCESS:", 12) == 0) {
             meta->last_accessed = (time_t)atol(line + 12);
         } else if (strncmp(line, "READ_USERS:", 11) == 0) {
