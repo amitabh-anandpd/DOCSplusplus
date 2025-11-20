@@ -7,6 +7,20 @@
 #include "../../include/common.h"
 #include "../../include/client_write.h"
 
+static void print_command_menu(void) {
+    printf("\n");
+    printf("═══════════════════════ Available Commands ═══════════════════════\n");
+    printf("  VIEW | VIEW -a | VIEW -l | VIEW -al\n");
+    printf("  CREATE <file>         DELETE <file>          INFO <file>\n");
+    printf("  READ <file> <n>       WRITE <file> <n>       STREAM <file>\n");
+    printf("  LOCATE <file>         UNDO <file>\n");
+    printf("  ADDACCESS -R|-W <file> <user>   REMACCESS <file> <user>\n");
+    printf("  CHECKPOINT <file> <tag>         VIEWCHECKPOINT <file> <tag>\n");
+    printf("  REVERT <file> <tag>             LISTCHECKPOINTS <file>\n");
+    printf("  MENU / HELP (show this list)    EXIT / QUIT (leave)\n");
+    printf("══════════════════════════════════════════════════════════════════\n\n");
+}
+
 int main() {
     int sock;
     struct sockaddr_in server_addr;
@@ -95,19 +109,7 @@ int main() {
     }
     
     // Print quick help once
-    printf("Available Commands:\n");
-    printf("  ┌─────────────────────────────────────────────────────────────────┐\n");
-    printf("  │ VIEW | VIEW -a | VIEW -l | VIEW -al                             │\n");
-    printf("  │ READ <filename>     │  CREATE <filename>  │  DELETE <filename>  │\n");
-    printf("  │ WRITE <filename> <sentence number>  │  INFO <filename>          │\n");
-    printf("  │ STREAM <filename>   │  EXEC <filename>                          │\n");
-    printf("  │ ADDACCESS -R|-W <filename> <username>  │  REMACCESS <filename> <username> │\n");
-    printf("  │ EXIT or QUIT - Leave the client                                 │\n");
-    printf("  │ LIST                                │\n");
-    printf("  │ UNDO <filename>                                │\n");
-    printf("  └─────────────────────────────────────────────────────────────────┘\n");
-    printf("\n");
-
+    print_command_menu();
     while (1) {
         printf("Client: ");
         fflush(stdout);
@@ -126,6 +128,12 @@ int main() {
 
         // exit commands
         if (strcasecmp(command, "EXIT") == 0 || strcasecmp(command, "QUIT") == 0) break;
+
+        // show menu
+        if (strcasecmp(command, "MENU") == 0 || strcasecmp(command, "HELP") == 0) {
+            print_command_menu();
+            continue;
+        }
 
         // Decide where to connect: STREAM should go straight to storage server
         // Special handling for STREAM command
