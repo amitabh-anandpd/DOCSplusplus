@@ -56,6 +56,7 @@ void refresh_filemeta_from_storage(const char *filename, int ss_id) {
     ssize_t n = recv(ss_sock, info_buf, sizeof(info_buf)-1, 0);
     if (n > 0) {
         info_buf[n] = '\0';
+        log_event(LOG_DEBUG, "INFO response from SS %d received (%zd bytes)", ss_id, n);
         FileMeta meta = {0};
         strncpy(meta.name, filename, sizeof(meta.name)-1);
         meta.ss_ids[0] = ss_id;
@@ -91,14 +92,33 @@ void refresh_filemeta_from_storage(const char *filename, int ss_id) {
         // Insert or update in hashmap
         FileMeta *existing = file_index_get(&file_index, meta.name);
         if (!existing) {
+            log_event(LOG_DEBUG, "Adding new file '%s' to hashmap from SS %d", meta.name, ss_id);
             FileMeta *newmeta = malloc(sizeof(FileMeta));
             *newmeta = meta;
             unsigned long h = hash_filename(meta.name) % file_index.num_buckets;
             newmeta->next = file_index.buckets[h];
             file_index.buckets[h] = newmeta;
         } else {
-            // Update all fields
-            *existing = meta;
+            log_event(LOG_DEBUG, "Updating file '%s' metadata in hashmap (last_modified: %ld -> %ld, last_accessed: %ld -> %ld)", 
+                      meta.name, existing->last_modified, meta.last_modified, existing->last_accessed, meta.last_accessed);
+            // Update fields but preserve next pointer and ss_ids list
+            FileMeta *preserve_next = existing->next;
+            int preserve_ss_ids[MAX_SS];
+            int preserve_ss_count = existing->ss_count;
+            memcpy(preserve_ss_ids, existing->ss_ids, sizeof(existing->ss_ids));
+            
+            // Update metadata fields
+            strncpy(existing->owner, meta.owner, sizeof(existing->owner) - 1);
+            existing->created_time = meta.created_time;
+            existing->last_modified = meta.last_modified;
+            existing->last_accessed = meta.last_accessed;
+            strncpy(existing->read_users, meta.read_users, sizeof(existing->read_users) - 1);
+            strncpy(existing->write_users, meta.write_users, sizeof(existing->write_users) - 1);
+            
+            // Restore preserved fields
+            existing->next = preserve_next;
+            memcpy(existing->ss_ids, preserve_ss_ids, sizeof(existing->ss_ids));
+            existing->ss_count = preserve_ss_count;
         }
         log_event(LOG_INFO, "[SYNC] Refreshed metadata for '%s' from SS %d", filename, ss_id);
     }
@@ -117,7 +137,7 @@ void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
     setsockopt(ss_sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
     int conn_res = connect(ss_sock, (struct sockaddr*)&sa, sizeof(sa));
     if (conn_res != 0) {
-        log_event(LOG_ERROR, "[DEBUG] connect() to SS %d at %s:%d failed: %s", ss_id, ip, client_port, strerror(errno));
+        log_event(LOG_ERROR, "connect() to SS %d at %s:%d failed: %s", ss_id, ip, client_port, strerror(errno));
     }
     if (conn_res == 0) {
         // Send VIEW command with authentication (use root/root or valid admin user)
@@ -125,10 +145,10 @@ void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
         send(ss_sock, view_cmd, strlen(view_cmd), 0);
         char view_buf[8192] = {0};
         ssize_t n = recv(ss_sock, view_buf, sizeof(view_buf)-1, 0);
-        log_event(LOG_INFO, "[DEBUG] recv() from SS %d returned n=%zd", ss_id, n);
+        log_event(LOG_DEBUG, "recv() from SS %d returned n=%zd", ss_id, n);
         if (n > 0) {
             view_buf[n] = '\0';
-            log_event(LOG_INFO, "[DEBUG] VIEW response from SS %d: %s", ss_id, view_buf);
+            log_event(LOG_DEBUG, "VIEW response from SS %d: %s", ss_id, view_buf);
             char *saveptr = NULL;
             char *line = strtok_r(view_buf, "\n", &saveptr);
             while (line) {
@@ -140,7 +160,7 @@ void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
                 // For each file, fetch metadata using INFO (with authentication)
                 char info_cmd[512];
                 snprintf(info_cmd, sizeof(info_cmd), "USER:admin\nPASS:admin123\nCMD:INFO %s\n", line);
-                log_event(LOG_INFO, "[DEBUG] Sending INFO for file: '%s' (cmd: %s)", line, info_cmd);
+                log_event(LOG_DEBUG, "Sending INFO for file: '%s'", line);
                 int info_sock = socket(AF_INET, SOCK_STREAM, 0);
                 if (info_sock < 0) { line = strtok_r(NULL, "\n", &saveptr); continue; }
                 setsockopt(info_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
@@ -186,7 +206,7 @@ void update_file_index_from_ss(const char *ip, int client_port, int ss_id) {
                         if (p) sscanf(p, "Write Access   : %511[^\n]", meta.write_users);
                         // Insert into hashmap
                         FileMeta *existing = file_index_get(&file_index, meta.name);
-                        log_event(LOG_INFO, "[DEBUG] Inserting file into hashmap: '%s' (key)", meta.name);
+                        log_event(LOG_DEBUG, "Inserting file into hashmap: '%s'", meta.name);
                         if (!existing) {
                             FileMeta *newmeta = malloc(sizeof(FileMeta));
                             *newmeta = meta;
@@ -1105,7 +1125,7 @@ int main() {
                 close(client_sock);
                 exit(0);
             }
-            log_event(LOG_INFO, "[DEBUG] Looking up file in hashmap: '%s' (key)", info_filename);
+            log_event(LOG_DEBUG, "Looking up file in hashmap: '%s'", info_filename);
             FileMeta *meta = find_filemeta(info_filename);
             if (!meta) {
                 const char *msg = "Error: File not found in name server index\n";
@@ -1114,32 +1134,14 @@ int main() {
                 close(client_sock);
                 exit(0);
             }
-            // Compose info response from meta
-            char response[2048];
-            char created_str[64] = "N/A", modified_str[64] = "N/A", accessed_str[64] = "N/A";
-            if (meta->created_time) strftime(created_str, sizeof(created_str), "%Y-%m-%d %H:%M:%S", localtime(&meta->created_time));
-            if (meta->last_modified) strftime(modified_str, sizeof(modified_str), "%Y-%m-%d %H:%M:%S", localtime(&meta->last_modified));
-            if (meta->last_accessed) strftime(accessed_str, sizeof(accessed_str), "%Y-%m-%d %H:%M:%S", localtime(&meta->last_accessed));
-            snprintf(response, sizeof(response),
-                "------------------- FILE INFO -------------------\n"
-                "File Name      : %s\n"
-                "Owner          : %s\n"
-                "Created        : %s\n"
-                "Last Modified  : %s\n"
-                "Last Access    : %s\n"
-                "Read Access    : %s\n"
-                "Write Access   : %s\n"
-                "Storage Servers: ",
-                meta->name, meta->owner, created_str, modified_str, accessed_str, meta->read_users, meta->write_users);
-            send(client_sock, response, strlen(response), 0);
-            // List storage servers
-            char sslist[256] = "";
-            for (int i = 0; i < meta->ss_count; ++i) {
-                char tmp[32];
-                snprintf(tmp, sizeof(tmp), "%d%s", meta->ss_ids[i], (i < meta->ss_count-1)?", ":"\n");
-                strcat(sslist, tmp);
+            // Instead of using stale hashmap data, fetch fresh INFO from storage server
+            // The storage server connection is already established above
+            char relay[4096]; 
+            ssize_t rcv;
+            while ((rcv = recv(storage_sock, relay, sizeof(relay)-1, 0)) > 0) { 
+                relay[rcv]='\0'; 
+                send(client_sock, relay, strlen(relay), 0); 
             }
-            send(client_sock, sslist, strlen(sslist), 0);
             close(storage_sock);
             close(client_sock);
             exit(0);
