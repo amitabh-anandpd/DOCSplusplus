@@ -271,7 +271,9 @@ static int add_storage_server(const char *ip, int nm_port, int client_port_from_
 
     int idx = num_storage_servers;
     storage_servers[idx].id = id;
-    strncpy(storage_servers[idx].ip, ip ? ip : "127.0.0.1", sizeof(storage_servers[idx].ip)-1);
+    // IP should always be provided (from connection source), no fallback to localhost
+    strncpy(storage_servers[idx].ip, ip, sizeof(storage_servers[idx].ip)-1);
+    storage_servers[idx].ip[sizeof(storage_servers[idx].ip)-1] = '\0';
     storage_servers[idx].nm_port = nm_port;
     if (client_port_from_reg <= 0) {
         storage_servers[idx].client_port = STORAGE_SERVER_PORT + id;
@@ -493,13 +495,19 @@ int main() {
             // parse registration lines
             char *saveptr = NULL;
             char *line = strtok_r(regbuf, "\n", &saveptr);
-            char ipstr[64] = "127.0.0.1";
+            // Use the connection source IP instead of reported IP
+            char ipstr[64];
+            strncpy(ipstr, client_ip, sizeof(ipstr)-1);
+            ipstr[sizeof(ipstr)-1] = '\0';
             int nm_port = NAME_SERVER_PORT;
             int client_port_reg = 0;
             char files[4096] = "";
+            char reported_ip[64] = "";
             while (line) {
                 if (strncmp(line, "IP:", 3) == 0) {
-                    strncpy(ipstr, line + 3, sizeof(ipstr)-1);
+                    // Store reported IP for logging, but don't use it
+                    strncpy(reported_ip, line + 3, sizeof(reported_ip)-1);
+                    reported_ip[sizeof(reported_ip)-1] = '\0';
                 } else if (strncmp(line, "NM_PORT:", 8) == 0) {
                     nm_port = atoi(line + 8);
                 } else if (strncmp(line, "CLIENT_PORT:", 12) == 0) {
@@ -509,8 +517,14 @@ int main() {
                 }
                 line = strtok_r(NULL, "\n", &saveptr);
             }
-
-            log_event(LOG_INFO, "Received TYPE:REGISTER_SS from IP=%s:%u (reported IP=%s, NM_PORT=%d, CLIENT_PORT=%d)", client_ip, client_port, ipstr, nm_port, client_port_reg);
+            // Log registration with actual vs reported IP if different
+            if (reported_ip[0] != '\0' && strcmp(ipstr, reported_ip) != 0) {
+                log_event(LOG_INFO, "Received TYPE:REGISTER_SS from IP=%s:%u (reported IP=%s differs from actual, using actual IP=%s, NM_PORT=%d, CLIENT_PORT=%d)", 
+                          client_ip, client_port, reported_ip, ipstr, nm_port, client_port_reg);
+            } else {
+                log_event(LOG_INFO, "Received TYPE:REGISTER_SS from IP=%s:%u (NM_PORT=%d, CLIENT_PORT=%d)", 
+                          client_ip, client_port, nm_port, client_port_reg);
+            }
             int ss_id = add_storage_server(ipstr, nm_port, client_port_reg, files);
             char resp[128];
             if (ss_id >= 0) {
@@ -686,122 +700,6 @@ int main() {
                     }
                     close(client_sock);
                     continue;
-                }
-            } else if (strncmp(peek_command, "ADDACCESS ", 10) == 0) {
-                // Parse: ADDACCESS -R|-W <filename> <target_username>
-                char flag[8], filename[256], target_user[64];
-                if (sscanf(peek_command + 10, "%s %s %s", flag, filename, target_user) == 3) {
-                    // Consume the request
-                    char reqbuf[8192];
-                    recv(client_sock, reqbuf, sizeof(reqbuf)-1, 0);
-                    
-                    // Check if requester is the owner
-                    FileMeta *meta = find_filemeta(filename);
-                    char response[512];
-                    if (!meta) {
-                        snprintf(response, sizeof(response), "Error: File '%s' not found\n", filename);
-                        send(client_sock, response, strlen(response), 0);
-                    } else if (strcmp(meta->owner, peek_username) != 0) {
-                        snprintf(response, sizeof(response), "Error: Only the owner can grant access to '%s'\n", filename);
-                        send(client_sock, response, strlen(response), 0);
-                    } else {
-                        // Update metadata in hashmap
-                        if (strcmp(flag, "-R") == 0) {
-                            // Add to read_users if not already present
-                            if (strstr(meta->read_users, target_user) == NULL) {
-                                if (strlen(meta->read_users) > 0) strcat(meta->read_users, ",");
-                                strncat(meta->read_users, target_user, sizeof(meta->read_users) - strlen(meta->read_users) - 1);
-                                snprintf(response, sizeof(response), "Success: Read access granted to '%s' for file '%s'\n", target_user, filename);
-                                log_event(LOG_INFO, "[PARENT] Read access granted to '%s' for file '%s'", target_user, filename);
-                            } else {
-                                snprintf(response, sizeof(response), "Info: User '%s' already has read access to '%s'\n", target_user, filename);
-                            }
-                        } else if (strcmp(flag, "-W") == 0) {
-                            // Add to write_users if not already present
-                            if (strstr(meta->write_users, target_user) == NULL) {
-                                if (strlen(meta->write_users) > 0) strcat(meta->write_users, ",");
-                                strncat(meta->write_users, target_user, sizeof(meta->write_users) - strlen(meta->write_users) - 1);
-                                snprintf(response, sizeof(response), "Success: Write access granted to '%s' for file '%s'\n", target_user, filename);
-                                log_event(LOG_INFO, "[PARENT] Write access granted to '%s' for file '%s'", target_user, filename);
-                            } else {
-                                snprintf(response, sizeof(response), "Info: User '%s' already has write access to '%s'\n", target_user, filename);
-                            }
-                        } else {
-                            snprintf(response, sizeof(response), "Error: Invalid flag '%s'. Use -R for read or -W for write\n", flag);
-                        }
-                        send(client_sock, response, strlen(response), 0);
-                    }
-                    close(client_sock);
-                    continue;
-                } else {
-                    // Invalid format, let it fall through to child process which will send error
-                }
-            } else if (strncmp(peek_command, "REMACCESS ", 10) == 0) {
-                // Parse: REMACCESS <filename> <target_username>
-                char filename[256], target_user[64];
-                if (sscanf(peek_command + 10, "%s %s", filename, target_user) == 2) {
-                    // Consume the request
-                    char reqbuf[8192];
-                    recv(client_sock, reqbuf, sizeof(reqbuf)-1, 0);
-                    
-                    // Check if requester is the owner
-                    FileMeta *meta = find_filemeta(filename);
-                    char response[512];
-                    if (!meta) {
-                        snprintf(response, sizeof(response), "Error: File '%s' not found\n", filename);
-                        send(client_sock, response, strlen(response), 0);
-                    } else if (strcmp(meta->owner, peek_username) != 0) {
-                        snprintf(response, sizeof(response), "Error: Only the owner can revoke access to '%s'\n", filename);
-                        send(client_sock, response, strlen(response), 0);
-                    } else if (strcmp(target_user, peek_username) == 0) {
-                        snprintf(response, sizeof(response), "Error: Cannot revoke owner's access\n");
-                        send(client_sock, response, strlen(response), 0);
-                    } else {
-                        // Remove from both read_users and write_users
-                        char new_read[512] = "", new_write[512] = "";
-                        
-                        // Remove from read_users
-                        char *read_copy = strdup(meta->read_users);
-                        if (read_copy) {
-                            char *saveptr_read = NULL;
-                            char *user = strtok_r(read_copy, ",", &saveptr_read);
-                            while (user) {
-                                if (strcmp(user, target_user) != 0) {
-                                    if (strlen(new_read) > 0) strcat(new_read, ",");
-                                    strcat(new_read, user);
-                                }
-                                user = strtok_r(NULL, ",", &saveptr_read);
-                            }
-                            free(read_copy);
-                        }
-                        
-                        // Remove from write_users
-                        char *write_copy = strdup(meta->write_users);
-                        if (write_copy) {
-                            char *saveptr_write = NULL;
-                            char *user = strtok_r(write_copy, ",", &saveptr_write);
-                            while (user) {
-                                if (strcmp(user, target_user) != 0) {
-                                    if (strlen(new_write) > 0) strcat(new_write, ",");
-                                    strcat(new_write, user);
-                                }
-                                user = strtok_r(NULL, ",", &saveptr_write);
-                            }
-                            free(write_copy);
-                        }
-                        
-                        // Update metadata
-                        strncpy(meta->read_users, new_read, sizeof(meta->read_users) - 1);
-                        strncpy(meta->write_users, new_write, sizeof(meta->write_users) - 1);
-                        
-                        snprintf(response, sizeof(response), "Success: All access revoked for '%s' on file '%s'\n", target_user, filename);
-                        log_event(LOG_INFO, "[PARENT] All access revoked for '%s' on file '%s'", target_user, filename);
-                        send(client_sock, response, strlen(response), 0);
-                    }
-                    close(client_sock);
-                    continue;
-                } else {
-                    // Invalid format, let it fall through to child process which will send error
                 }
             }
         }
