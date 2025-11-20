@@ -133,47 +133,46 @@ if (strncmp(command, "STREAM", 6) == 0) {
     // Extract filename
     char filename[256];
     sscanf(command + 7, "%s", filename);
-    
-    // Step 1: Connect to Name Server to get storage server IP and port
+
+    // Step 1: Ask NM for SS IP and port using LOCATE command
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("Socket creation failed");
         continue;
     }
-    
+
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(NAME_SERVER_PORT);
     server_addr.sin_addr.s_addr = inet_addr(NAME_SERVER_IP);
-    
+
     if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("Connection to Name Server failed");
         close(sock);
         continue;
     }
-    
-    // Send INFO command to get storage server location
-    char info_cmd[512];
-    snprintf(info_cmd, sizeof(info_cmd), "INFO %s", filename);
-    send(sock, info_cmd, strlen(info_cmd), 0);
-    
-    // Read response
-    ssize_t bytes = read(sock, buffer, sizeof(buffer) - 1);
-    buffer[bytes] = '\0';
+
+    // Send LOCATE command to get SS location
+    char locate_cmd[512];
+    snprintf(locate_cmd, sizeof(locate_cmd), "LOCATE %s", filename);
+    send(sock, locate_cmd, strlen(locate_cmd), 0);
+
+    // Read response (expecting: SS_IP: ...\nSS_PORT: ...\n or error)
+    char locate_response[512] = "";
+    ssize_t bytes = read(sock, locate_response, sizeof(locate_response) - 1);
+    if (bytes > 0) locate_response[bytes] = '\0';
     close(sock);
-    
-    // Parse storage server IP and port
-    char ss_ip[64] = "", *ip_line = strstr(buffer, "Storage Server IP:");
+
+    char ss_ip[64] = "";
     int ss_port = -1;
-    if (ip_line) {
-        sscanf(ip_line, "Storage Server IP: %63s", ss_ip);
-        char *port_line = strstr(buffer, "Storage Server Port:");
-        if (port_line) {
-            sscanf(port_line, "Storage Server Port: %d", &ss_port);
-        }
+    char *ip_line = strstr(locate_response, "SS_IP:");
+    char *port_line = strstr(locate_response, "SS_PORT:");
+    if (ip_line && port_line) {
+        sscanf(ip_line, "SS_IP: %63s", ss_ip);
+        sscanf(port_line, "SS_PORT: %d", &ss_port);
     }
     if (strlen(ss_ip) == 0 || ss_port <= 0) {
         printf("Error: Could not find storage server for file '%s'\n", filename);
-        printf("%s\n", buffer);
+        printf("%s\n", locate_response);
         continue;
     }
     // Step 2: Connect to the correct storage server
