@@ -33,7 +33,6 @@ void list_files(int client_sock, int show_all, int show_long, const char* userna
     struct dirent *entry;
     struct stat file_stat;
     char path[512], response[8192];
-    struct passwd *pwd;
     
     // Open per-server files directory
     char server_files_dir[512];
@@ -75,16 +74,23 @@ void list_files(int client_sock, int show_all, int show_long, const char* userna
         if (show_long) {
             int word_count = 0, char_count = 0;
             count_file(path, &word_count, &char_count);
+
+            // NEW: pull owner & last access from metadata file instead of filesystem user
+            FileMetadata meta;
+            const char *owner = "unknown";
+            time_t last_access_raw = file_stat.st_atime;
+
+            if (read_metadata_file(entry->d_name, &meta) == 0) {
+                if (meta.owner[0] != '\0') owner = meta.owner;
+                if (meta.last_accessed > 0) last_access_raw = meta.last_accessed;
+            }
             
             char access_time[64];
             strftime(access_time, sizeof(access_time), "%Y-%m-%d %H:%M",
-                     localtime(&file_stat.st_atime));
-            
-            pwd = getpwuid(file_stat.st_uid);
-            const char *owner = pwd ? pwd->pw_name : "unknown";
-            
+                     localtime(&last_access_raw));
+
             char line[512];
-            sprintf(line, "| %-10s| %-5d | %-5d | %-16s | %-5s |\n",
+            sprintf(line, "| %-10s| %-5d | %-5d | %-16s | %-10s |\n",
                     entry->d_name, word_count, char_count, access_time, owner);
             strcat(response, line);
         } else {
