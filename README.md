@@ -86,6 +86,7 @@ On NM host:
 ./name_server.out
 ```
 NOTE: NM IP needs to be hardcoded
+
 On SS host (server_id = 1):
 ```bash
 ./storage_server.out 1
