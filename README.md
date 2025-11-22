@@ -85,13 +85,14 @@ On NM host:
 ```bash
 ./name_server.out
 ```
+NOTE: NM IP needs to be hardcoded
 On SS host (server_id = 1):
 ```bash
-NAME_SERVER_IP=<nm_ip> ./storage_server.out 1
+./storage_server.out 1
 ```
 On Client host:
 ```bash
-NAME_SERVER_IP=<nm_ip> ./client.out
+./client.out
 ```
 
 ## Checkpoint & Undo System
